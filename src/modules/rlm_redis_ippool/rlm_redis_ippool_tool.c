@@ -1490,11 +1490,11 @@ do { \
 
 		if (!p->pool) {
 			p->pool = pool_arg;
-			p->pool_len = talloc_array_length(pool_arg);
+			p->pool_len = talloc_array_length(pool_arg) - 1;
 		}
 		if (!p->range && range_arg) {
 			p->range = range_arg;
-			p->range_len = talloc_array_length(range_arg);
+			p->range_len = talloc_array_length(range_arg) - 1;
 		}
 	}
 
