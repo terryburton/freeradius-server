@@ -203,42 +203,40 @@ jobs:
     - name: Install fixture (redis)
       if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
       run: |
-        sudo apt-get install -y --no-install-recommends redis-server redis-tools
-        sudo systemctl start redis-server
+        apt-get install -y --no-install-recommends redis-server redis-tools
+        systemctl start redis-server
 
     - name: Install fixture (openldap)
       if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
       run: |
-        sudo apt-get install -y --no-install-recommends slapd ldap-utils apparmor-utils
-        sudo systemctl stop slapd
-        sudo aa-complain /usr/sbin/slapd
+        apt-get install -y --no-install-recommends slapd ldap-utils apparmor-utils
+        systemctl stop slapd
 
     - name: Install fixture (dovecot imapd)
       if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
       run: |
-        sudo apt-get install -y --no-install-recommends dovecot-imapd
-        sudo systemctl stop dovecot
-        sudo aa-complain /usr/sbin/dovecot
+        apt-get install -y --no-install-recommends dovecot-imapd
+        systemctl stop dovecot
 
     - name: Install fixture (exim)
       if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
       run: |
-        sudo apt-get install -y --no-install-recommends exim4
-        sudo systemctl stop exim4
+        apt-get install -y --no-install-recommends exim4
+        systemctl stop exim4
 
-    - name: Configure fixture (PostgreSQL)
-      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
-      run: |
-        export PG_VER=13
-        sudo sh -c "echo host  all all 127.0.0.1/32 trust >  /etc/postgresql/$PG_VER/main/pg_hba.conf"
-        sudo sh -c "echo local all all              trust >> /etc/postgresql/$PG_VER/main/pg_hba.conf"
-        sudo systemctl start postgresql
-
-    - name: Configure fixture (MySQL)
-      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
-      run: |
-        sudo systemctl start mysql
-        mysql -h 127.0.0.1 -uroot -proot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '';";
+#    - name: Configure fixture (PostgreSQL)
+#      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
+#      run: |
+#        export PG_VER=13
+#        sh -c "echo host  all all 127.0.0.1/32 trust >  /etc/postgresql/$PG_VER/main/pg_hba.conf"
+#        sh -c "echo local all all              trust >> /etc/postgresql/$PG_VER/main/pg_hba.conf"
+#        systemctl start postgresql
+#
+#    - name: Configure fixture (MySQL)
+#      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
+#      run: |
+#        systemctl start mysql
+#        mysql -h 127.0.0.1 -uroot -proot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '';";
 
     - name: Setup fixtures and run full CI tests
       if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
@@ -300,7 +298,7 @@ jobs:
     - name: "Debug: Install backported tmate 2.4.0 on Ubuntu 18.04"
       run: |
         wget -O tmate.deb https://github.com/terryburton/tmate/releases/download/2.4.0/tmate_2.4.0-2_amd64.deb
-        sudo apt-get install -y --no-install-recommends ./tmate.deb
+        apt-get install -y --no-install-recommends ./tmate.deb
       if: ${{ github.ref == 'refs/heads/ci-debug' && failure() && matrix.env.OS == 'ubuntu-18.04' }}
 
     - name: "Debug: Start tmate"
