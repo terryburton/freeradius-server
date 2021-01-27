@@ -66,9 +66,16 @@ jobs:
 
     steps:
 
+    - name: Package manager performance improvements
+      run: |
+        sh -c 'echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup'
+        apt-get update
+        apt-get install -y --no-install-recommends man-db
+        echo 'man-db man-db/auto-update boolean false' | debconf-set-selections
+        dpkg-reconfigure -fnoninteractive man-db
+
     - name: Install recent git with LFS support
       run: |
-        apt-get update
         apt-get install -y --no-install-recommends software-properties-common
         add-apt-repository ppa:git-core/ppa
         apt-get install -y --no-install-recommends git-core git-lfs ca-certificates
@@ -91,15 +98,6 @@ jobs:
     # Now the LFS pull will be local if we hit the cache, or remote otherwise
     - name: Git LFS pull
       run: git lfs pull
-
-    - name: Package manager performance improvements
-      if: ${{ runner.os != 'macOS' }}
-      run: |
-        sh -c 'echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup'
-        apt-get install -y --no-install-recommends man-db
-        echo 'man-db man-db/auto-update boolean false' | debconf-set-selections
-        dpkg-reconfigure -fnoninteractive man-db
-        sed -i 's/^update_initramfs=.*/update_initramfs=no/' /etc/initramfs-tools/update-initramfs.conf
 
     - name: Install build dependencies based on Debian packages plus extra CI packages
       if: ${{ runner.os != 'macOS' }}
