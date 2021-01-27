@@ -102,7 +102,7 @@ jobs:
     - name: Install build dependencies based on Debian packages plus extra CI packages
       if: ${{ runner.os != 'macOS' }}
       run: |
-        apt-get install -y --no-install-recommends build-essential devscripts equivs quilt
+        apt-get install -y --no-install-recommends build-essential devscripts equivs quilt wget multiarch-support gnupg2
         debian/rules debian/control
         mk-build-deps -irt"apt-get -y --no-install-recommends" debian/control
         mk-build-deps -irt"apt-get -y --no-install-recommends" scripts/ci/extra-packages.debian.control
