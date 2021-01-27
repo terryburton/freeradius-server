@@ -122,7 +122,7 @@ jobs:
       id: pick_commit
       run: |
         while : ; do
-          CFLAGS="-DWITH_EVAL_DEBUG -O2 -g3" ./configure -C \
+          CFLAGS="-DWITH_EVAL_DEBUG -g3" ./configure -C \
             --enable-werror \
             --enable-llvm-address-sanitizer \
             --enable-llvm-undefined-behaviour-sanitizer \
