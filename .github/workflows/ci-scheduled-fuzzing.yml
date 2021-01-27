@@ -158,7 +158,3 @@ jobs:
         name: fuzzer-${{ matrix.env.PROTOCOL }}-${{ steps.pick_commit.outputs.commit_id }}
         path: build/fuzzer
       if: ${{ failure() }}
-
-    - name: "Debug: Start tmate"
-      uses: mxschmitt/action-tmate@v3
-
