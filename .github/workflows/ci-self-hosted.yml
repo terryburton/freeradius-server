@@ -68,9 +68,9 @@ jobs:
 
     - name: Install recent git with LFS support
       run: |
-        sudo add-apt-repository ppa:git-core/ppa
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends git-core git-lfs ca-certificates
+        add-apt-repository ppa:git-core/ppa
+        apt-get update
+        apt-get install -y --no-install-recommends git-core git-lfs ca-certificates
 
     # Checkout, but defer pulling LFS objects until we've restored the cache
     - uses: actions/checkout@v2
@@ -94,25 +94,25 @@ jobs:
     - name: Package manager performance improvements
       if: ${{ runner.os != 'macOS' }}
       run: |
-        sudo sh -c 'echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup'
-        echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
-        sudo dpkg-reconfigure -fnoninteractive man-db
-        sudo sed -i 's/^update_initramfs=.*/update_initramfs=no/' /etc/initramfs-tools/update-initramfs.conf
+        sh -c 'echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup'
+        echo 'man-db man-db/auto-update boolean false' | debconf-set-selections
+        dpkg-reconfigure -fnoninteractive man-db
+        sed -i 's/^update_initramfs=.*/update_initramfs=no/' /etc/initramfs-tools/update-initramfs.conf
 
     - name: Install build dependencies based on Debian packages plus extra CI packages
       if: ${{ runner.os != 'macOS' }}
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends build-essential devscripts equivs quilt
+        apt-get update
+        apt-get install -y --no-install-recommends build-essential devscripts equivs quilt
         debian/rules debian/control
-        sudo mk-build-deps -irt"apt-get -y --no-install-recommends" debian/control
-        sudo mk-build-deps -irt"apt-get -y --no-install-recommends" scripts/ci/extra-packages.debian.control
+        mk-build-deps -irt"apt-get -y --no-install-recommends" debian/control
+        mk-build-deps -irt"apt-get -y --no-install-recommends" scripts/ci/extra-packages.debian.control
 
     - uses: actions/setup-ruby@v1
       if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
 
     - name: Install cassandra driver (not yet available on 20.04)
-      run: sudo ./scripts/ci/cassandra-install.sh
+      run: ./scripts/ci/cassandra-install.sh
 
     - name: Install dependencies (MacOS)
       if: ${{ runner.os == 'macOS' }}
@@ -146,17 +146,17 @@ jobs:
       if: ${{ matrix.env.CC == 'clang' && runner.os != 'macOS' }}
       run: |
         . /etc/os-release
-        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add
-        sudo apt-add-repository "deb http://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-10 main"
-        sudo apt-get install -y --no-install-recommends clang-10 llvm-10 gdb
-        sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-10 60 && sudo update-alternatives --set clang /usr/bin/clang-10
-        sudo update-alternatives --install /usr/bin/llvm-symbolizer llvm-symbolizer /usr/bin/llvm-symbolizer-10 60 && sudo update-alternatives --set llvm-symbolizer /usr/bin/llvm-symbolizer-10
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add
+        apt-add-repository "deb http://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-10 main"
+        apt-get install -y --no-install-recommends clang-10 llvm-10 gdb
+        update-alternatives --install /usr/bin/clang clang /usr/bin/clang-10 60 && update-alternatives --set clang /usr/bin/clang-10
+        update-alternatives --install /usr/bin/llvm-symbolizer llvm-symbolizer /usr/bin/llvm-symbolizer-10 60 && update-alternatives --set llvm-symbolizer /usr/bin/llvm-symbolizer-10
 
     - name: Install GCC 10
       if: ${{ matrix.env.CC == 'gcc' }}
       run: |
-        sudo apt-get install -y --no-install-recommends gcc-10 gccgo-10 gdb
-        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 60 && sudo update-alternatives --set gcc /usr/bin/gcc-10
+        apt-get install -y --no-install-recommends gcc-10 gccgo-10 gdb
+        update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 60 && update-alternatives --set gcc /usr/bin/gcc-10
 
     #
     #  Build using some alternative libraries
@@ -167,9 +167,9 @@ jobs:
     - name: Use alternative libraries
       if: ${{ matrix.env.LIBS_ALT == 'yes' }}
       run: |
-        sudo apt-get install -y --no-install-recommends libpcre3-dev  # "PCRE 1"
-        sudo apt-get purge -y libpcre2-dev  # Remove default PCRE 2, leaving only PCRE 1
-        sudo apt-get install -y --no-install-recommends heimdal-dev
+        apt-get install -y --no-install-recommends libpcre3-dev  # "PCRE 1"
+        apt-get purge -y libpcre2-dev  # Remove default PCRE 2, leaving only PCRE 1
+        apt-get install -y --no-install-recommends heimdal-dev
 
     - name: Show versions
       run: |
