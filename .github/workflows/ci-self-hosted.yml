@@ -188,42 +188,42 @@ jobs:
         make -j `nproc`
       if: ${{ matrix.env.TEST_TYPE != 'fuzzing' }}
 
-#    - name: Clang Static Analyzer
-#      if: ${{ matrix.env.CC == 'clang' && runner.os != 'macOS' && matrix.env.TEST_TYPE != 'fuzzing' }}
+    - name: Clang Static Analyzer
+      if: ${{ matrix.env.CC == 'clang' && runner.os != 'macOS' && matrix.env.TEST_TYPE != 'fuzzing' }}
+      run: |
+        make -j `nproc` scan && [ "$(find build/plist/ -name *.html)" = '' ];
+
+    - name: "Clang Static Analyzer: Store assets on failure"
+      uses: actions/upload-artifact@v2
+      with:
+        name: clang-scan.tgz
+        path: build/plist/**/*.html
+      if: ${{ matrix.env.CC == 'clang' && failure() }}
+
+#    - name: Install fixture (redis)
+#      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
 #      run: |
-#        make -j `nproc` scan && [ "$(find build/plist/ -name *.html)" = '' ];
+#        apt-get install -y --no-install-recommends redis-server redis-tools
+#        systemctl start redis-server
 #
-#    - name: "Clang Static Analyzer: Store assets on failure"
-#      uses: actions/upload-artifact@v2
-#      with:
-#        name: clang-scan.tgz
-#        path: build/plist/**/*.html
-#      if: ${{ matrix.env.CC == 'clang' && failure() }}
-
-    - name: Install fixture (redis)
-      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
-      run: |
-        apt-get install -y --no-install-recommends redis-server redis-tools
-        systemctl start redis-server
-
-    - name: Install fixture (openldap)
-      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
-      run: |
-        apt-get install -y --no-install-recommends slapd ldap-utils apparmor-utils
-        systemctl stop slapd
-
-    - name: Install fixture (dovecot imapd)
-      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
-      run: |
-        apt-get install -y --no-install-recommends dovecot-imapd
-        systemctl stop dovecot
-
-    - name: Install fixture (exim)
-      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
-      run: |
-        apt-get install -y --no-install-recommends exim4
-        systemctl stop exim4
-
+#    - name: Install fixture (openldap)
+#      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
+#      run: |
+#        apt-get install -y --no-install-recommends slapd ldap-utils apparmor-utils
+#        systemctl stop slapd
+#
+#    - name: Install fixture (dovecot imapd)
+#      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
+#      run: |
+#        apt-get install -y --no-install-recommends dovecot-imapd
+#        systemctl stop dovecot
+#
+#    - name: Install fixture (exim)
+#      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
+#      run: |
+#        apt-get install -y --no-install-recommends exim4
+#        systemctl stop exim4
+#
 #    - name: Configure fixture (PostgreSQL)
 #      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
 #      run: |
@@ -238,29 +238,28 @@ jobs:
 #        systemctl start mysql
 #        mysql -h 127.0.0.1 -uroot -proot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '';";
 
-    - name: Setup fixtures and run full CI tests
-      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
-      run: |
-        for i in \
-            postgresql-setup.sh \
-            imap-setup.sh \
-            exim-setup.sh \
-            mysql-setup.sh \
-            ldap-setup.sh \
-            redis-setup.sh; do
-
-            script="./scripts/ci/$i"
-            echo "Calling $i"
-            $script
-        done
-        make ci-test
-
-#    # Test env is a bit slow so we disable performance-based tests
-#    - name: Run self-hosted tests
-#      if: ${{ matrix.env.TEST_TYPE == 'self-hosted' }}
+#    - name: Setup fixtures and run full CI tests
+#      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
 #      run: |
-#        : > src/lib/util/strerror_tests.mk
-#        make test
+#        for i in \
+#            postgresql-setup.sh \
+#            imap-setup.sh \
+#            exim-setup.sh \
+#            mysql-setup.sh \
+#            ldap-setup.sh \
+#            redis-setup.sh; do
+#
+#            script="./scripts/ci/$i"
+#            echo "Calling $i"
+#            $script
+#        done
+#        make ci-test
+
+    # Test env is a bit slow so we disable performance-based tests
+    - name: Run self-hosted tests
+      run: |
+        : > src/lib/util/strerror_tests.mk
+        make test
 
     # Fuzz in parallel, aiming to keep to overall runtime of this job in line
     # with other jobs in the CI workflow
