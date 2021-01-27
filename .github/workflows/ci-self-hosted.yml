@@ -67,7 +67,6 @@ jobs:
     steps:
 
     - name: Install recent git with LFS support
-      if: ${{ startsWith(matrix.env.NAME, 'selfhosted-') }}
       run: |
         sudo add-apt-repository ppa:git-core/ppa
         sudo apt-get update
