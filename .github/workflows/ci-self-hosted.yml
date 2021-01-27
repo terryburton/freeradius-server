@@ -68,8 +68,9 @@ jobs:
 
     - name: Install recent git with LFS support
       run: |
-        add-apt-repository ppa:git-core/ppa
         apt-get update
+        apt-get install -y --no-install-recommends software-properties-common
+        add-apt-repository ppa:git-core/ppa
         apt-get install -y --no-install-recommends git-core git-lfs ca-certificates
 
     # Checkout, but defer pulling LFS objects until we've restored the cache
