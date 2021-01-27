@@ -197,5 +197,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *buf, size_t len)
 	 */
 	fr_strerror_clear();
 
+	char* test = malloc(1000);
+	test = NULL;
+
 	return 0;
 }
