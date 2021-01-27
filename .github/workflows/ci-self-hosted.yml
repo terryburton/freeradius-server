@@ -96,6 +96,7 @@ jobs:
       if: ${{ runner.os != 'macOS' }}
       run: |
         sh -c 'echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup'
+        apt-get install -y --no-install-recommends man-db
         echo 'man-db man-db/auto-update boolean false' | debconf-set-selections
         dpkg-reconfigure -fnoninteractive man-db
         sed -i 's/^update_initramfs=.*/update_initramfs=no/' /etc/initramfs-tools/update-initramfs.conf
@@ -103,7 +104,6 @@ jobs:
     - name: Install build dependencies based on Debian packages plus extra CI packages
       if: ${{ runner.os != 'macOS' }}
       run: |
-        apt-get update
         apt-get install -y --no-install-recommends build-essential devscripts equivs quilt
         debian/rules debian/control
         mk-build-deps -irt"apt-get -y --no-install-recommends" debian/control
