@@ -107,35 +107,8 @@ jobs:
         mk-build-deps -irt"apt-get -y --no-install-recommends" debian/control
         mk-build-deps -irt"apt-get -y --no-install-recommends" scripts/ci/extra-packages.debian.control
 
-    - uses: actions/setup-ruby@v1
-      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
-
     - name: Install cassandra driver (not yet available on 20.04)
       run: ./scripts/ci/cassandra-install.sh
-
-    - name: Install dependencies (MacOS)
-      if: ${{ runner.os == 'macOS' }}
-      run: |
-        brew install \
-          cassandra-cpp-driver \
-          gperftools \
-          hiredis \
-          json-c \
-          libidn \
-          libmemcached \
-          luajit \
-          mariadb \
-          make \
-          mruby \
-          talloc
-        ln -s `brew --prefix`/opt/make/bin/gmake /usr/local/bin/make
-        echo "#! /bin/sh"               >> /usr/local/bin/nproc
-        echo "sysctl -n hw.physicalcpu" >> /usr/local/bin/nproc
-        chmod +x /usr/local/bin/nproc
-      env:
-        HOMEBREW_NO_AUTO_UPDATE: 1
-        HOMEBREW_NO_INSTALL_CLEANUP: 1
-        HOMEBREW_CLEANUP_PERIODIC_FULL_DAYS: 3650
 
     - name: Install tacacs_plus
       run: |
@@ -215,7 +188,6 @@ jobs:
         make -j `nproc`
       if: ${{ matrix.env.TEST_TYPE != 'fuzzing' }}
 
-#    # Disabled on MacOS and when fuzzing to reduce the runtime
 #    - name: Clang Static Analyzer
 #      if: ${{ matrix.env.CC == 'clang' && runner.os != 'macOS' && matrix.env.TEST_TYPE != 'fuzzing' }}
 #      run: |
@@ -228,11 +200,11 @@ jobs:
 #        path: build/plist/**/*.html
 #      if: ${{ matrix.env.CC == 'clang' && failure() }}
 
-#    - name: Install fixture (redis)
-#      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
-#      run: |
-#        sudo apt-get install -y --no-install-recommends redis-server redis-tools
-#        sudo systemctl start redis-server
+    - name: Install fixture (redis)
+      if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
+      run: |
+        sudo apt-get install -y --no-install-recommends redis-server redis-tools
+        sudo systemctl start redis-server
 
     - name: Install fixture (openldap)
       if: ${{ matrix.env.TEST_TYPE == 'fixtures' }}
