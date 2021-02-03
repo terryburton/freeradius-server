@@ -105,7 +105,7 @@ jobs:
         sudo mk-build-deps -irt"apt-get -y --no-install-recommends" scripts/ci/extra-packages.debian.control
 
     - name: Install cassandra driver (not yet available on 20.04)
-      run: ./scripts/ci/cassandra-install.sh
+      run: sudo ./scripts/ci/cassandra-install.sh
 
     - name: Install tacacs_plus
       run: |
