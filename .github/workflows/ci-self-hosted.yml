@@ -257,6 +257,7 @@ jobs:
       run: |
         : > src/lib/util/strerror_tests.mk
         make test
+      if: ${{ matrix.env.TEST_TYPE != 'fuzzing' }}
 
     # Fuzz in parallel, aiming to keep to overall runtime of this job in line
     # with other jobs in the CI workflow
