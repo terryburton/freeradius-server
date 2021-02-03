@@ -65,11 +65,11 @@ jobs:
 
     - name: Package manager performance improvements
       run: |
-        sh -c 'echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup'
-        apt-get update
-        apt-get install -y --no-install-recommends man-db
-        echo 'man-db man-db/auto-update boolean false' | debconf-set-selections
-        dpkg-reconfigure -fnoninteractive man-db
+        sudo sh -c 'echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup'
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends man-db
+        echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
+        sudo dpkg-reconfigure -fnoninteractive man-db
 
     - name: Install recent git with LFS support
       run: |
