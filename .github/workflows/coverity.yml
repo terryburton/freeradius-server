@@ -37,25 +37,10 @@ jobs:
           key: coverity-tool-cache-${{ runner.os }}
           path: coverity_tool.tar.gz
 
-      - name: Download coverity tool
-        if: steps.cache-coverity.outputs.cache-hit != 'true'
-        run: |
-          wget https://scan.coverity.com/download/linux64 \
-            --post-data "token=${TOKEN}&project=FreeRADIUS%2Ffreeradius-server" \
-            -O coverity_tool.tar.gz
-        env:
-          TOKEN: ${{ secrets.COVERITY_SCAN_TOKEN }}
-
-      - name: Extract coverity tool
-        run: |
-          mkdir coverity_tool
-          tar xzf coverity_tool.tar.gz --strip 1 -C coverity_tool
-
       - name: Build with Coverity
         run: |
-          export PATH=`pwd`/coverity_tool/bin:$PATH
           ./configure -with-rlm-python-bin=/usr/bin/python2.7
-          cov-build --dir cov-int make
+          make -j 8
 
       - name: Submit result
         run: |
