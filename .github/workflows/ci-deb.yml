@@ -135,6 +135,25 @@ jobs:
         echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup
         echo 'man-db man-db/auto-update boolean false' | debconf-set-selections
 
+    #
+    #  This ensures that we have a small, consistent runtime and is an
+    #  alternative to v3.0.x packages away from "safe primes" as we have for
+    #  v4.
+    #
+    - name: Installed pre-created DH params
+      run; |
+        mkdir -p /etc/freeradius/certs
+        cat <<EOF > /etc/freeradius/certs/dh
+        -----BEGIN DH PARAMETERS-----
+        MIIBCAKCAQEAjYx1+hX0Trvkzpyt/merdQs68lDLxWBrsVPRHgO51F909TJIA0AX
+        O2sJgiXRoahWLIyI9ab4o2CdxuNI/PRA+tPMPHsqN2O79iDKSuRH8tc67N8KnBNU
+        hd1MOsOdYZYcxXZADy5nlAnfVqLbxQdHCBt0EkXCr4rbK1VWDiTeJxHgrxqTRH2Q
+        KZOim22s6eYryCRyGEbZr3HzHiiWFT5KnQ5wrjKR4b81uaAa+UJBSH4Dyrnwll3P
+        vv1wrGExKzRx915BZDm6/J2qI1RKvmAwbk2rdJKA/oBNkYVZYg0B299VAO8BeFjy
+        dzBQCc88jRT6v56+jE+EAtAIViXX61o62wIBAg==
+        -----END DH PARAMETERS-----
+        EOF
+
     - name: Install DEBs
       run: |
         apt-get update
