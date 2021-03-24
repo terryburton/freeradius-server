@@ -141,7 +141,7 @@ jobs:
     #  v4.
     #
     - name: Installed pre-created DH params
-      run; |
+      run: |
         mkdir -p /etc/freeradius/certs
         cat <<EOF > /etc/freeradius/certs/dh
         -----BEGIN DH PARAMETERS-----
