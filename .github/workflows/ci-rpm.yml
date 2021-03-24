@@ -84,6 +84,30 @@ jobs:
       run: |
         yum-builddep -y freeradius/redhat/freeradius.spec
 
+    #
+    #  This ensures that we have a small, consistent runtime and is an
+    #  alternative to v3.0.x packages away from "safe primes" as we have for
+    #  v4.
+    #
+    #  This is a compromise on our design goal: We save ~1 min at the expense
+    #  of not verifying that the packages can bootstrap the DH params by
+    #  themselves. So we disable this trick for scheduled builds.
+    #
+    - name: Installed pre-created DH params
+      if: ${{ github.event_name != 'schedule' }}
+      run: |
+        cat <<EOF > raddb/certs/dh
+        -----BEGIN DH PARAMETERS-----
+        MIIBCAKCAQEAjYx1+hX0Trvkzpyt/merdQs68lDLxWBrsVPRHgO51F909TJIA0AX
+        O2sJgiXRoahWLIyI9ab4o2CdxuNI/PRA+tPMPHsqN2O79iDKSuRH8tc67N8KnBNU
+        hd1MOsOdYZYcxXZADy5nlAnfVqLbxQdHCBt0EkXCr4rbK1VWDiTeJxHgrxqTRH2Q
+        KZOim22s6eYryCRyGEbZr3HzHiiWFT5KnQ5wrjKR4b81uaAa+UJBSH4Dyrnwll3P
+        vv1wrGExKzRx915BZDm6/J2qI1RKvmAwbk2rdJKA/oBNkYVZYg0B299VAO8BeFjy
+        dzBQCc88jRT6v56+jE+EAtAIViXX61o62wIBAg==
+        -----END DH PARAMETERS-----
+        EOF
+      working-directory: freeradius
+
     - name: Build RPMs
       run: |
         [ -r /opt/rh/devtoolset-8/enable ] && source /opt/rh/devtoolset-8/enable || :
