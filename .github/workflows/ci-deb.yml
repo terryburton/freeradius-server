@@ -140,7 +140,12 @@ jobs:
     #  alternative to v3.0.x packages away from "safe primes" as we have for
     #  v4.
     #
+    #  This is a compromise on our design goal: We save ~1 min at the expense
+    #  of not verifying that the packages can bootstrap the DH params by
+    #  themselves. So we disable this trick for scheduled builds.
+    #
     - name: Installed pre-created DH params
+      if: ${{ github.event_name != 'schedule' }}
       run: |
         mkdir -p /etc/freeradius/certs
         cat <<EOF > /etc/freeradius/certs/dh
