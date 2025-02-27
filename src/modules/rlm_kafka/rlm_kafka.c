@@ -306,7 +306,6 @@ static ssize_t kafka_xlat(void *instance, REQUEST *request, char const *fmt, cha
 {
 	rlm_kafka_t	*inst = instance;
 	char const	*p = fmt;
-	uint8_t const	*key;
 	ssize_t		key_len = 0;
 	char		*expanded = NULL;
 
@@ -314,7 +313,7 @@ static ssize_t kafka_xlat(void *instance, REQUEST *request, char const *fmt, cha
 		const uint8_t *key_const;
 		char* const key_unconst;
 	} k;
-	key = k.key_const = NULL;
+	k.key_const = NULL;
 
 	*out = '\0';
 
