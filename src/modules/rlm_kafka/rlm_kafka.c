@@ -333,10 +333,10 @@ static ssize_t kafka_xlat(void *instance, REQUEST *request, char const *fmt, cha
 		}
 		strlcpy(key_ref, fmt, (p - fmt) + 1);
 
-		key_len = xlat_fmt_to_ref(&key, request, key_ref);
+		key_len = xlat_fmt_to_ref(&k.key_const, request, key_ref);
 		if (key_len < 0) return -1;
 
-		RDEBUG3("message key=%.*s\n", (int)key_len, key);
+		RDEBUG3("message key=%.*s\n", (int)key_len, k.key_const);
 	} else if (*p != ' ') {
 		/*
 		 * Require a space to disambiguate data starting with "&"
