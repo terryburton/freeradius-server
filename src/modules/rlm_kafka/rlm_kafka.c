@@ -70,6 +70,17 @@ typedef struct rlm_kafka_t {
 	rlm_kafka_section_config_t postauth;
 	rlm_kafka_section_config_t accounting;
 
+	/*
+	 *	Virtual server called upon failed delivery of asynchronous messages
+	 *
+	 */
+	char const *virtual_server;
+
+	/*
+	 *	Also call the virtual server upon successful delivery
+	 */
+	bool report_success;
+
 } rlm_kafka_t;
 
 static const CONF_PARSER global_config[] = {
@@ -113,6 +124,8 @@ static const CONF_PARSER module_config[] = {
 	{ "post-auth", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const*) postauth_config },
 	{ "accounting", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const*) accounting_config },
 	{ "statistics", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const*) stats_config },
+	{ "virtual-server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_kafka_t, virtual_server), NULL },
+	{ "report-success", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_kafka_t, report_success), "no" },
 	CONF_PARSER_TERMINATOR
 };
 
@@ -134,10 +147,15 @@ static int stats_cb (UNUSED rd_kafka_t *rk, char *json, size_t json_len, void *o
  * rd_kafka_poll() or rd_kafka_flush() and executes on the application's
  * thread.
  */
-static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, UNUSED void *opaque) {
-	rd_kafka_resp_err_t	*status;
+static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void *opaque) {
+	rlm_kafka_t		*inst = opaque;
 	int32_t 		broker_id = -1;
 	const char		*persisted = "unknown";
+	REQUEST			*request;
+	RADCLIENT		*client;
+	RADIUS_PACKET		*packet = NULL;
+	RADIUS_PACKET		*reply_packet = NULL;
+	VALUE_PAIR		*vp;
 
 	/*
 	 *  For synchronous send, acknowledge by writing err into the message's opaque.
@@ -145,7 +163,7 @@ static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage
 	 *  Any error is reported immediately by the thread that was waiting for this.
 	 */
 	if (rkmessage->_private) {
-		status = (rd_kafka_resp_err_t *)rkmessage->_private;
+		rd_kafka_resp_err_t *status = (rd_kafka_resp_err_t *)rkmessage->_private;
 		*status = rkmessage->err;
 		return;
 	}
@@ -153,7 +171,6 @@ static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage
 	/*
 	 *  Message must have been sent asynchronously if we get this far.
 	 */
-	if (!rkmessage->err) return;
 
 #if RD_KAFKA_VERSION >= 0x010500ff
         broker_id = rd_kafka_message_broker_id(rkmessage);
@@ -176,12 +193,100 @@ static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage
 	}
 #endif
 
-	ERROR("Kafka delivery report '%s' for key: %.*s (%s persisted to broker %" PRId32 ")\n",
-	      rd_kafka_err2str(rkmessage->err),
-	      (int)rkmessage->key_len, (char *)rkmessage->key,
-	      persisted,
-	      broker_id
-	     );
+	/*
+	 *  Report errors if we are not going to call the delivery report virtual server.
+	 *
+	 */
+	if (!inst->virtual_server && rkmessage->err) {
+		ERROR("Kafka delivery report '%s' for key: %.*s (%s persisted to broker %" PRId32 ")\n",
+		rd_kafka_err2str(rkmessage->err),
+		(int)rkmessage->key_len, (char *)rkmessage->key,
+		persisted,
+		broker_id
+		);
+	}
+
+	if (!inst->virtual_server || (!inst->report_success && !rkmessage->err)) return;
+
+	/*
+	 *  Create a fake request to handle asynchronous delivery reports
+	 *
+	 */
+	request = request_alloc(NULL);
+	if (unlikely(!request)) return;
+
+	packet = rad_alloc(request, false);
+	if (unlikely(!packet)) {
+	error:
+		TALLOC_FREE(reply_packet);
+		TALLOC_FREE(packet);
+		TALLOC_FREE(request);
+		return;
+	}
+
+	reply_packet = rad_alloc(request, false);
+	if (unlikely(!reply_packet)) goto error;
+
+	client = talloc_zero(request, RADCLIENT);
+	client->ipaddr.af = AF_INET;
+	client->ipaddr.ipaddr.ip4addr.s_addr = INADDR_NONE;
+	client->ipaddr.prefix = 0;
+	client->nas_type = talloc_strdup(client, "none");
+	request->client = client;
+
+	request->packet = packet;
+	request->reply = reply_packet;
+	request->root = &main_config;
+
+	request->server = inst->virtual_server;
+	request->handle = rad_postauth;
+
+	/*
+	 *  xlat (and thus rlm_detail) needs something to work with
+	 */
+	gettimeofday(&request->packet->timestamp, NULL);
+
+	/*
+	 *  Build the fake request with the limited
+	 *      information that we have.
+	 */
+	if (rkmessage->err) {
+		vp = fr_pair_afrom_num(packet, PW_TMP_STRING_0, 0);
+		rad_assert(vp != NULL);
+		fr_pair_value_strcpy(vp, rd_kafka_err2str(rkmessage->err));
+		fr_pair_add(&request->packet->vps, vp);
+	}
+
+	if (broker_id != -1) {
+		vp = fr_pair_afrom_num(packet, PW_TMP_INTEGER_0, 0);
+		rad_assert(vp != NULL);
+		vp->vp_integer = broker_id;
+		fr_pair_add(&request->packet->vps, vp);
+	}
+
+	vp = fr_pair_afrom_num(packet, PW_TMP_STRING_1, 0);
+	rad_assert(vp != NULL);
+	fr_pair_value_strcpy(vp, persisted);
+	fr_pair_add(&request->packet->vps, vp);
+
+	if (rkmessage->key_len > 0) {
+		vp = fr_pair_afrom_num(packet, PW_TMP_OCTETS_0, 0);
+		rad_assert(vp != NULL);
+		fr_pair_value_memcpy(vp, rkmessage->key, rkmessage->key_len);
+		fr_pair_add(&request->packet->vps, vp);
+	}
+
+	if (rkmessage->len > 0) {
+		vp = fr_pair_afrom_num(packet, PW_TMP_OCTETS_1, 0);
+		rad_assert(vp != NULL);
+		fr_pair_value_memcpy(vp, rkmessage->payload, rkmessage->len);
+		fr_pair_add(&request->packet->vps, vp);
+	}
+
+	VERIFY_REQUEST(request);
+
+	request_inject(request);
+
 }
 
 /*
