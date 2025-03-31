@@ -32,6 +32,14 @@ RCSID("$Id$")
 
 #define LOG_PREFIX "rlm_kafka"
 
+#define PW_KAFKA_ERROR_MESSAGE		(1163)
+#define PW_KAFKA_BROKER_ID		(1164)
+#define PW_KAFKA_MESSAGE_KEY		(1165)
+#define PW_KAFKA_MESSAGE_PAYLOAD	(1166)
+#define PW_KAFKA_MESSAGE_TIMESTAMP	(1167)
+#define PW_KAFKA_MESSAGE_LATENCY_USEC	(1168)
+#define PW_KAFKA_MESSAGE_STATUS		(1169)
+
 #define RLM_KAFKA_PROP_SET(CONF, PROP, VALUE, BUF_ERRSTR) 								\
 	do {														\
 		if (rd_kafka_conf_set(CONF, PROP, VALUE, BUF_ERRSTR, sizeof(BUF_ERRSTR)) != RD_KAFKA_CONF_OK )		\
@@ -148,14 +156,15 @@ static int stats_cb (UNUSED rd_kafka_t *rk, char *json, size_t json_len, void *o
  * thread.
  */
 static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void *opaque) {
-	rlm_kafka_t		*inst = opaque;
-	int32_t 		broker_id = -1;
-	const char		*persisted = "unknown";
-	REQUEST			*request;
-	RADCLIENT		*client;
-	RADIUS_PACKET		*packet = NULL;
-	RADIUS_PACKET		*reply_packet = NULL;
-	VALUE_PAIR		*vp;
+	rlm_kafka_t			*inst = opaque;
+	int32_t 			broker_id = -1;
+	rd_kafka_msg_status_t		msg_status = -1;
+	int64_t 			ts, latency;
+	REQUEST				*request;
+	RADCLIENT			*client;
+	RADIUS_PACKET			*packet = NULL;
+	RADIUS_PACKET			*reply_packet = NULL;
+	VALUE_PAIR			*vp;
 
 	/*
 	 *  For synchronous send, acknowledge by writing err into the message's opaque.
@@ -168,6 +177,8 @@ static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage
 		return;
 	}
 
+	DEBUG3("Delivery report callback running for asynchronous request");
+
 	/*
 	 *  Message must have been sent asynchronously if we get this far.
 	 */
@@ -177,27 +188,28 @@ static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage
 #endif
 
 #if RD_KAFKA_VERSION >= 0x010000ff
-	switch (rd_kafka_message_status(rkmessage)) {
-	case RD_KAFKA_MSG_STATUS_PERSISTED:
-		persisted = "definately";
-		break;
-
-	case RD_KAFKA_MSG_STATUS_NOT_PERSISTED:
-		persisted = "not";
-		break;
-
-	case RD_KAFKA_MSG_STATUS_POSSIBLY_PERSISTED:
-		persisted = "possibly";
-		break;
-
-	}
+	msg_status = rd_kafka_message_status(rkmessage);
 #endif
 
 	/*
-	 *  Report errors if we are not going to call the delivery report virtual server.
+	 *  Report errors if we are not about to call the delivery report virtual server.
 	 *
 	 */
 	if (!inst->virtual_server && rkmessage->err) {
+		const char *persisted;
+		switch (msg_status) {
+			case RD_KAFKA_MSG_STATUS_PERSISTED:
+				persisted = "definately";
+				break;
+			case RD_KAFKA_MSG_STATUS_NOT_PERSISTED:
+				persisted = "not";
+				break;
+			case RD_KAFKA_MSG_STATUS_POSSIBLY_PERSISTED:
+				persisted = "possibly";
+				break;
+			default:
+				persisted = "unknown";
+		}
 		ERROR("Kafka delivery report '%s' for key: %.*s (%s persisted to broker %" PRId32 ")\n",
 		rd_kafka_err2str(rkmessage->err),
 		(int)rkmessage->key_len, (char *)rkmessage->key,
@@ -207,6 +219,8 @@ static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage
 	}
 
 	if (!inst->virtual_server || (!inst->report_success && !rkmessage->err)) return;
+
+	DEBUG3("Queuing request to delivery report virtual server: %s", inst->virtual_server);
 
 	/*
 	 *  Create a fake request to handle asynchronous delivery reports
@@ -233,7 +247,6 @@ static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage
 	client->ipaddr.prefix = 0;
 	client->nas_type = talloc_strdup(client, "none");
 	request->client = client;
-
 	request->packet = packet;
 	request->reply = reply_packet;
 	request->root = &main_config;
@@ -246,41 +259,62 @@ static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage
 	 */
 	gettimeofday(&request->packet->timestamp, NULL);
 
-	/*
-	 *  Build the fake request with the limited
-	 *      information that we have.
-	 */
 	if (rkmessage->err) {
-		vp = fr_pair_afrom_num(packet, PW_TMP_STRING_0, 0);
-		rad_assert(vp != NULL);
-		fr_pair_value_strcpy(vp, rd_kafka_err2str(rkmessage->err));
-		fr_pair_add(&request->packet->vps, vp);
+		vp = fr_pair_afrom_num(packet, PW_KAFKA_ERROR_MESSAGE, 0);
+		if (vp) {
+			fr_pair_value_strcpy(vp, rd_kafka_err2str(rkmessage->err));
+			fr_pair_add(&request->packet->vps, vp);
+		}
 	}
 
 	if (broker_id != -1) {
-		vp = fr_pair_afrom_num(packet, PW_TMP_INTEGER_0, 0);
-		rad_assert(vp != NULL);
-		vp->vp_integer = broker_id;
-		fr_pair_add(&request->packet->vps, vp);
+		vp = fr_pair_afrom_num(packet, PW_KAFKA_BROKER_ID, 0);
+		if (vp) {
+			vp->vp_integer = broker_id;
+			fr_pair_add(&request->packet->vps, vp);
+		}
 	}
 
-	vp = fr_pair_afrom_num(packet, PW_TMP_STRING_1, 0);
-	rad_assert(vp != NULL);
-	fr_pair_value_strcpy(vp, persisted);
-	fr_pair_add(&request->packet->vps, vp);
+	if (msg_status != (rd_kafka_msg_status_t)-1) {
+		vp = fr_pair_afrom_num(packet, PW_KAFKA_MESSAGE_STATUS, 0);
+		if (vp) {
+			vp->vp_integer = msg_status;
+			fr_pair_add(&request->packet->vps, vp);
+		}
+	}
 
 	if (rkmessage->key_len > 0) {
-		vp = fr_pair_afrom_num(packet, PW_TMP_OCTETS_0, 0);
-		rad_assert(vp != NULL);
-		fr_pair_value_memcpy(vp, rkmessage->key, rkmessage->key_len);
-		fr_pair_add(&request->packet->vps, vp);
+		vp = fr_pair_afrom_num(packet, PW_KAFKA_MESSAGE_KEY, 0);
+		if (vp) {
+			fr_pair_value_memcpy(vp, rkmessage->key, rkmessage->key_len);
+			fr_pair_add(&request->packet->vps, vp);
+		}
 	}
 
 	if (rkmessage->len > 0) {
-		vp = fr_pair_afrom_num(packet, PW_TMP_OCTETS_1, 0);
-		rad_assert(vp != NULL);
-		fr_pair_value_memcpy(vp, rkmessage->payload, rkmessage->len);
-		fr_pair_add(&request->packet->vps, vp);
+		vp = fr_pair_afrom_num(packet, PW_KAFKA_MESSAGE_PAYLOAD, 0);
+		if (vp) {
+			fr_pair_value_memcpy(vp, rkmessage->payload, rkmessage->len);
+			fr_pair_add(&request->packet->vps, vp);
+		}
+	}
+
+	ts = rd_kafka_message_timestamp(rkmessage, NULL);
+	if (ts > 0) {
+		vp = fr_pair_afrom_num(packet, PW_KAFKA_MESSAGE_TIMESTAMP, 0);
+		if (vp) {
+			vp->vp_integer64 = ts;
+			fr_pair_add(&request->packet->vps, vp);
+		}
+	}
+
+	latency = rd_kafka_message_latency(rkmessage);
+	if (latency > 0) {
+		vp = fr_pair_afrom_num(packet, PW_KAFKA_MESSAGE_LATENCY_USEC, 0);
+		if (vp) {
+			vp->vp_integer64 = latency;
+			fr_pair_add(&request->packet->vps, vp);
+		}
 	}
 
 	VERIFY_REQUEST(request);
