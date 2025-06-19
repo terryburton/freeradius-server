@@ -13,6 +13,7 @@ rlm_exec
 rlm_expiration
 rlm_files
 rlm_json
+rlm_kafka
 rlm_krb5
 rlm_ldap
 rlm_linelog
