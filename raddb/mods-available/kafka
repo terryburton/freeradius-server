@@ -85,46 +85,10 @@ kafka {
 	}
 
 	#
-	#  Topic used by calls from an accounting section
-	#
-	topic-config accounting {
-
-		#
-		#  You may either provide topic configuration parameters
-		#  or reference an existing topic (declared above this) to
-		#  reuse it.
-		#
-		#reference = custom-topic
-
-	}
-
-	#
-	#  Topic used by calls from an authorize section
-	#
-	topic-config authorize {
-
-		#
-		#  Used to set the topic name to something other than the
-		#  section from which it was called.
-		#
-		#name = "radius.auth_request"
-
-	}
-
-	#
-	#  Topic used by calls from a post-auth section
-	#
-	topic-config post-auth {
-		#name = "radius.auth_result"
-		#request.required.acks = 2
-	}
-
-	#
 	#  Uncomment to generate producer statistics
 	#
 #	statistics {
 #		file = /tmp/kafka_stats.json
 #	}
 
-	$INCLUDE ${modconfdir}/kafka/messages-json.conf
 }

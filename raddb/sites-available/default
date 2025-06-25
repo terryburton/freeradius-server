@@ -717,6 +717,12 @@ server default {
 #  ### Receive Access-Request packets
 #
 recv Access-Request {
+
+
+%kafka("custom-topic", User-Name, "%{User-Name} %{Filter-Id}", "&Acct-Status-Type &NAS-Identifier")
+
+return
+
 	#
 	#  Take a `User-Name`, and perform some checks on it, for
 	#  spaces and other invalid characters. If the `User-Name`

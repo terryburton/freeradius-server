@@ -24,138 +24,78 @@
  */
 RCSID("$Id$")
 
-#include <time.h>
 #include <freeradius-devel/server/base.h>
-#include <freeradius-devel/server/global_lib.h>
 #include <freeradius-devel/server/module_rlm.h>
-#include <freeradius-devel/util/slab.h>
+#include <freeradius-devel/unlang/xlat_func.h>
+
 #include <librdkafka/rdkafka.h>
 
 static fr_sbuff_parse_rules_t const header_arg_parse_rules = {
-        .terminals = &FR_SBUFF_TERMS(
-                L("\t"),
-                L(" "),
-                L("!")
-        )
+	.terminals = &FR_SBUFF_TERMS(
+		L("\t"),
+		L(" "),
+		L("!")
+	)
 };
 
 #define LOG_PREFIX inst->name
 
-#define RLM_KAFKA_PROP_SET(CONF, PROP, VALUE, BUF_ERRSTR)                                                               \
-        do {                                                                                                            \
-                if (rd_kafka_conf_set(CONF, PROP, VALUE, BUF_ERRSTR, sizeof(BUF_ERRSTR)) != RD_KAFKA_CONF_OK )          \
-                        ERROR("Error setting Kafka global property: '%s=%s' : %s\n", PROP, VALUE, BUF_ERRSTR);          \
-        } while (0)
+#define RLM_KAFKA_PROP_SET(CONF, PROP, VALUE, BUF_ERRSTR)								\
+	do {														\
+		if (rd_kafka_conf_set(CONF, PROP, VALUE, BUF_ERRSTR, sizeof(BUF_ERRSTR)) != RD_KAFKA_CONF_OK )		\
+			ERROR("Error setting Kafka global property: '%s=%s' : %s\n", PROP, VALUE, BUF_ERRSTR);		\
+	} while (0)
 
-#define RLM_KAFKA_TOPIC_PROP_SET(CONF, PROP, VALUE, BUF_ERRSTR)                                                         \
-        do {                                                                                                            \
-                if (rd_kafka_topic_conf_set(CONF, PROP, VALUE, BUF_ERRSTR, sizeof(BUF_ERRSTR)) != RD_KAFKA_CONF_OK )    \
-                        ERROR("Error setting Kafka topic property: '%s=%s' : %s\n", PROP, VALUE, BUF_ERRSTR);           \
-        } while (0)
-
-// static fr_dict_t const *dict_radius; /*dictionary for radius protocol*/
-
-// TODO understand the necessity for the protocol dict here
-//extern fr_dict_autoload_t rlm_kafka_dict[];
-//fr_dict_autoload_t	  rlm_kafka_dict[] = { { .out = &dict_radius, .proto = "radius" }, { NULL } };
-
-//extern fr_dict_attr_autoload_t rlm_kafka_dict_attr[];
-//fr_dict_attr_autoload_t	       rlm_kafka_dict_attr[] = {
-//	       { NULL },
-//};
-
-//extern global_lib_autoinst_t const *const rlm_kafka_lib[];
-//global_lib_autoinst_t const *const	  rlm_kafka_lib[] = { GLOBAL_LIB_TERMINATOR };
-
-typedef struct rlm_kafka_section_config {
-
-        CONF_SECTION *cs;
-        char const *reference;
-        char const *key;
-        char const *headers;
-
-        /*
-         *  Topic handle to avoid rbtree lookups for section-based calls
-         *
-         */
-        rd_kafka_topic_t *rkt;
-
-} rlm_kafka_section_config_t;
+#define RLM_KAFKA_TOPIC_PROP_SET(CONF, PROP, VALUE, BUF_ERRSTR)								\
+	do {														\
+		if (rd_kafka_topic_conf_set(CONF, PROP, VALUE, BUF_ERRSTR, sizeof(BUF_ERRSTR)) != RD_KAFKA_CONF_OK )	\
+			ERROR("Error setting Kafka topic property: '%s=%s' : %s\n", PROP, VALUE, BUF_ERRSTR);		\
+	} while (0)
 
 typedef struct rlm_kafka_rkt_by_name {
 
 	fr_rb_node_t		node;
 
 	const char		*name;
-        rd_kafka_topic_t	*rkt;
+	rd_kafka_topic_t	*rkt;
 
-        /*
-         *  Only one entry is the "owner" for a topic, and all others are
-         *  references to it (having ref = true)
-         */
-        bool 			ref;
+	/*
+	 *  Only one entry is the "owner" for a topic, and all others are
+	 *  references to it (having ref = true)
+	 */
+	bool 			ref;
 
 } rkt_by_name_entry_t;
 
 typedef struct rlm_kafka_t {
 
-        char const *name;
+	char const *name;
 
-        bool async;
+	bool async;
 
-        char const *bootstrap;
-        char const *schema;
+	char const *bootstrap;
+	char const *schema;
 
-        char const *stats_filename;
-        FILE *stats_file;
+	char const *stats_filename;
+	FILE *stats_file;
 
-        rd_kafka_t *rk;
+	rd_kafka_t *rk;
 
-        fr_rb_tree_t *rkt_by_name_tree;
-
-        rlm_kafka_section_config_t authorize;
-        rlm_kafka_section_config_t postauth;
-        rlm_kafka_section_config_t accounting;
+	fr_rb_tree_t *rkt_by_name_tree;
 
 } rlm_kafka_t;
 
-/* TODO */
-typedef struct {
-	char const *abc;
-} rlm_kafka_thread_t;
-
 static const conf_parser_t global_config[] = {
-        CONF_PARSER_TERMINATOR
+	CONF_PARSER_TERMINATOR
 };
 
 static const conf_parser_t topic_config[] = {
-        CONF_PARSER_TERMINATOR
-};
-
-static const conf_parser_t authorize_config[] = {
-        { FR_CONF_OFFSET("reference", rlm_kafka_t, authorize.reference), .dflt = ".message" },
-        { FR_CONF_OFFSET("key", rlm_kafka_t, authorize.key) },
-        { FR_CONF_OFFSET("headers", rlm_kafka_t, authorize.headers) },
-        CONF_PARSER_TERMINATOR
-};
-
-static const conf_parser_t postauth_config[] = {
-        { FR_CONF_OFFSET("reference", rlm_kafka_t, postauth.reference), .dflt = ".message" },
-        { FR_CONF_OFFSET("key", rlm_kafka_t, postauth.key) },
-        { FR_CONF_OFFSET("headers", rlm_kafka_t, postauth.headers) },
-        CONF_PARSER_TERMINATOR
-};
-
-static const conf_parser_t accounting_config[] = {
-        { FR_CONF_OFFSET("reference", rlm_kafka_t, accounting.reference), .dflt = ".message" },
-        { FR_CONF_OFFSET("key", rlm_kafka_t, accounting.key) },
-        { FR_CONF_OFFSET("headers", rlm_kafka_t, accounting.headers) },
-        CONF_PARSER_TERMINATOR
+	CONF_PARSER_TERMINATOR
 };
 
 static const conf_parser_t stats_config[] = {
-        { FR_CONF_OFFSET_FLAGS("file", CONF_FLAG_FILE_OUTPUT, rlm_kafka_t, stats_filename) },
-        CONF_PARSER_TERMINATOR
+	{ FR_CONF_OFFSET_FLAGS("file", CONF_FLAG_FILE_OUTPUT, rlm_kafka_t, stats_filename) },
+	CONF_PARSER_TERMINATOR
 };
 
 /*
@@ -172,43 +112,39 @@ static const conf_parser_t stats_config[] = {
  *
  */
 static const conf_parser_t module_config[] = {
-        { FR_CONF_OFFSET_FLAGS("bootstrap-servers", CONF_FLAG_REQUIRED, rlm_kafka_t, bootstrap) },
-        { FR_CONF_OFFSET("asynchronous", rlm_kafka_t, async), .dflt = "no" },
-        { FR_CONF_POINTER("global-config", 0, CONF_FLAG_SUBSECTION, NULL), .subcs = (void const*) global_config },
+	{ FR_CONF_OFFSET_FLAGS("bootstrap-servers", CONF_FLAG_REQUIRED, rlm_kafka_t, bootstrap) },
+	{ FR_CONF_OFFSET("asynchronous", rlm_kafka_t, async), .dflt = "no" },
+	{ FR_CONF_POINTER("global-config", 0, CONF_FLAG_SUBSECTION, NULL), .subcs = (void const*) global_config },
 	{ FR_CONF_POINTER("topic-config", 0, CONF_FLAG_SUBSECTION, NULL), .subcs = (void const*) topic_config },
-	{ FR_CONF_POINTER("authorize", 0, CONF_FLAG_SUBSECTION, NULL), .subcs = (void const*) authorize_config },
-	{ FR_CONF_POINTER("post-auth", 0, CONF_FLAG_SUBSECTION, NULL), .subcs = (void const*) postauth_config },
-	{ FR_CONF_POINTER("accounting", 0, CONF_FLAG_SUBSECTION, NULL), .subcs = (void const*) accounting_config },
 	{ FR_CONF_POINTER("statistics", 0, CONF_FLAG_SUBSECTION, NULL), .subcs = (void const*) stats_config },
-        CONF_PARSER_TERMINATOR
+	CONF_PARSER_TERMINATOR
 };
 
 static int stats_cb (UNUSED rd_kafka_t *rk, char *json, size_t json_len, void *opaque) {
-        rlm_kafka_t     *inst = opaque;
+	rlm_kafka_t *inst = opaque;
 
-        /*
-         *  Apparently this callback does not need to be re-entrant...
-         */
-        DEBUG3("stats callback");
-        fprintf(inst->stats_file, "%.*s\n", (int)json_len, json);
-        fflush(inst->stats_file);
+	/*
+	 *  Apparently this callback does not need to be re-entrant...
+	 */
+	DEBUG3("stats callback");
+	fprintf(inst->stats_file, "%.*s\n", (int)json_len, json);
+	fflush(inst->stats_file);
 
-        return 0;
+	return 0;
 }
 
 static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, UNUSED void *opaque)
 {
-	rd_kafka_resp_err_t *status;
-	int32_t		     broker_id = -1;
-	const char	    *persisted = "unknown";
+	rd_kafka_resp_err_t	*status;
+	int32_t			broker_id = -1;
+	const char		*persisted = "unknown";
 
 	/*
-         *  For synchronous send, acknowledge by writing err into the message's opaque.
-         *
-         *  Any error is reported immediately by the thread that was waiting for this.
-         */
+	 *  For synchronous send, acknowledge by writing err into the message's opaque.
+	 *
+	 *  Any error is reported immediately by the thread that was waiting for this.
+	 */
 	if (rkmessage->_private) {
-		printf("returning from kafka callback at _private check\n");
 		status	= (rd_kafka_resp_err_t *)rkmessage->_private;
 		*status = rkmessage->err;
 		return;
@@ -253,23 +189,23 @@ static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage
 static void log_cb(UNUSED const rd_kafka_t *rk, int level, UNUSED const char *facility, const char *buf)
 {
 
-        /*
-         *  Map Kafka error levels (based on syslog severities) to FR log levels
-         */
-        switch (level) {
-        case 4:
-                WARN("%s", buf);
-                break;
-        case 5:
-        case 6:
-                INFO("%s", buf);
-                break;
-        case 7:
-                DEBUG("%s", buf);
-                break;
-        default:
-                ERROR("%s", buf);
-        }
+	/*
+	 *  Map Kafka error levels (based on syslog severities) to FR log levels
+	 */
+	switch (level) {
+	case 4:
+		WARN("%s", buf);
+		break;
+	case 5:
+	case 6:
+		INFO("%s", buf);
+		break;
+	case 7:
+		DEBUG("%s", buf);
+		break;
+	default:
+		ERROR("%s", buf);
+	}
 }
 
 
@@ -287,98 +223,98 @@ static void log_cb(UNUSED const rd_kafka_t *rk, int level, UNUSED const char *fa
  */
 #define NO_DELIVERY_REPORT INT_MIN
 #define RETRIES 2
-static int kafka_produce(rlm_kafka_t *inst, UNUSED request_t *request, rd_kafka_topic_t *rkt,
-                         char* const key, const size_t key_len, char* const message, const size_t len,
-                         rd_kafka_headers_t *hdrs, const bool async) {
+static int kafka_produce(rlm_kafka_t const *inst, UNUSED request_t *request, rd_kafka_topic_t *rkt,
+			 char* const key, const size_t key_len, char* const message, const size_t len,
+			 rd_kafka_headers_t *hdrs, const bool async) {
 
-        rd_kafka_resp_err_t     status = NO_DELIVERY_REPORT;
-        rd_kafka_resp_err_t     err;
-        int                     attempt;
+	rd_kafka_resp_err_t	status = NO_DELIVERY_REPORT;
+	rd_kafka_resp_err_t	err;
+	int			attempt;
 
-        /*
-         *  Non-blocking poll to service queue callbacks
-         */
-        rd_kafka_poll(inst->rk, 0);
+	/*
+	 *  Non-blocking poll to service queue callbacks
+	 */
+	rd_kafka_poll(inst->rk, 0);
 
-        /*
-         * This is an asynchronous call, on success it will only enqueue the
-         * message on the internal producer queue.
-         *
-         * The actual delivery attempts to the broker are handled by background
-         * threads.
-         *
-         * RD_KAFKA_MSG_F_COPY is set for async delivery to ensure that the
-         * message persists even after the request is cleaned up.
-         *
-         * key is always copied.
-         *
-         */
-        for (attempt = 1; attempt <= RETRIES + 1; attempt++) {
-                err = rd_kafka_producev(inst->rk,
-                                        RD_KAFKA_V_RKT(rkt),
-                                        RD_KAFKA_V_MSGFLAGS(async ? RD_KAFKA_MSG_F_COPY : 0),
-                                        RD_KAFKA_V_KEY(key, key_len),
-                                        RD_KAFKA_V_VALUE(message, len),
-                                        RD_KAFKA_V_HEADERS(hdrs),
-                                        RD_KAFKA_V_OPAQUE(async ? NULL : &status),
-                                        RD_KAFKA_V_END
-                                       );
+	/*
+	 * This is an asynchronous call, on success it will only enqueue the
+	 * message on the internal producer queue.
+	 *
+	 * The actual delivery attempts to the broker are handled by background
+	 * threads.
+	 *
+	 * RD_KAFKA_MSG_F_COPY is set for async delivery to ensure that the
+	 * message persists even after the request is cleaned up.
+	 *
+	 * key is always copied.
+	 *
+	 */
+	for (attempt = 1; attempt <= RETRIES + 1; attempt++) {
+		err = rd_kafka_producev(inst->rk,
+					RD_KAFKA_V_RKT(rkt),
+					RD_KAFKA_V_MSGFLAGS(async ? RD_KAFKA_MSG_F_COPY : 0),
+					RD_KAFKA_V_KEY(key, key_len),
+					RD_KAFKA_V_VALUE(message, len),
+					RD_KAFKA_V_HEADERS(hdrs),
+					RD_KAFKA_V_OPAQUE(async ? NULL : &status),
+					RD_KAFKA_V_END
+				       );
 
-                if (err != RD_KAFKA_RESP_ERR__QUEUE_FULL) break;
+		if (err != RD_KAFKA_RESP_ERR__QUEUE_FULL) break;
 
-                RERROR("Kafka queue full: %s. Produce attempt %d/%d\n",
-                       rd_kafka_err2str(err), attempt, RETRIES + 1);
-                rd_kafka_poll(inst->rk, 1000);
-        }
+		RERROR("Kafka queue full: %s. Produce attempt %d/%d\n",
+		       rd_kafka_err2str(err), attempt, RETRIES + 1);
+		rd_kafka_poll(inst->rk, 1000);
+	}
 
-        /*
-         *  If rd_kafka_producev() failed then we still own any headers.
-         *
-         */
-        if (err != RD_KAFKA_RESP_ERR_NO_ERROR && hdrs)
-                rd_kafka_headers_destroy(hdrs);
+	/*
+	 *  If rd_kafka_producev() failed then we still own any headers.
+	 *
+	 */
+	if (err != RD_KAFKA_RESP_ERR_NO_ERROR && hdrs)
+		rd_kafka_headers_destroy(hdrs);
 
-        /*
-         *  If the delivery is specified as synchronous and we did not
-         *  encounter an immediate error when producing to the queue then
-         *  enforce synchronous behaviour. We do this by polling for changes to
-         *  the stack-allocated err component of the message's opaque made by
-         *  the delivery report callback once the message is durably received
-         *  by brokers.
-         *
-         *  Note: We cannot implement a local timeout here, otherwise we
-         *  invalidate the message's stack-allocated opaque as soon as this
-         *  function exits such that a later callback would write into invalid
-         *  memory! Instead, we rely on the delivery report callback firing
-         *  after the topic's message.timeout.ms.
-         *
-         */
-        if (!async && err == RD_KAFKA_RESP_ERR_NO_ERROR) {
-                while (status == NO_DELIVERY_REPORT)
-                        rd_kafka_poll(inst->rk, 1000);  /* Timeout avoids busy waiting */
-                err = status;
-        }
+	/*
+	 *  If the delivery is specified as synchronous and we did not
+	 *  encounter an immediate error when producing to the queue then
+	 *  enforce synchronous behaviour. We do this by polling for changes to
+	 *  the stack-allocated err component of the message's opaque made by
+	 *  the delivery report callback once the message is durably received
+	 *  by brokers.
+	 *
+	 *  Note: We cannot implement a local timeout here, otherwise we
+	 *  invalidate the message's stack-allocated opaque as soon as this
+	 *  function exits such that a later callback would write into invalid
+	 *  memory! Instead, we rely on the delivery report callback firing
+	 *  after the topic's message.timeout.ms.
+	 *
+	 */
+	if (!async && err == RD_KAFKA_RESP_ERR_NO_ERROR) {
+		while (status == NO_DELIVERY_REPORT)
+			rd_kafka_poll(inst->rk, 1000);  /* Timeout avoids busy waiting */
+		err = status;
+	}
 
-        if (err != RD_KAFKA_RESP_ERR_NO_ERROR) {
-                RERROR("Failed to produce to Kafka topic: %s: %s\n",
-                       rd_kafka_topic_name(rkt), rd_kafka_err2str(err));
-                return -1;
-        }
+	if (err != RD_KAFKA_RESP_ERR_NO_ERROR) {
+		RERROR("Failed to produce to Kafka topic: %s: %s\n",
+		       rd_kafka_topic_name(rkt), rd_kafka_err2str(err));
+		return -1;
+	}
 
-        return 0;
+	return 0;
 
 }
 #undef NO_DELIVERY_REPORT
 
 static int create_headers(request_t *request, const char *in, rd_kafka_headers_t **out)
 {
-        rd_kafka_headers_t      *hdrs = NULL;
-        fr_pair_list_t          header_vps, vps;
-	int                     num_vps;
-	fr_sbuff_t              sbuff;
+	rd_kafka_headers_t	*hdrs = NULL;
+	fr_pair_list_t		header_vps, vps;
+	int			num_vps;
+	fr_sbuff_t		sbuff;
 
-        if (!in)
-                return 0;
+	if (!in)
+		return 0;
 
 	fr_pair_list_init(&header_vps);
 	fr_pair_list_init(&vps);
@@ -388,8 +324,8 @@ static int create_headers(request_t *request, const char *in, rd_kafka_headers_t
 
 	while (fr_sbuff_extend(&sbuff)) {
 		bool		negate = false;
-		tmpl_t          *vpt = NULL;
-                ssize_t         slen;
+		tmpl_t	  *vpt = NULL;
+		ssize_t	 slen;
 
 		/* Check if we should be removing attributes */
 		if (fr_sbuff_next_if_char(&sbuff, '!'))
@@ -456,15 +392,15 @@ static int create_headers(request_t *request, const char *in, rd_kafka_headers_t
 		fr_sbuff_adv_past_whitespace(&sbuff, SIZE_MAX, NULL);
 	}
 
-        /*
-         *  Create the Kafka headers for the derived VPs
-         *
-         */
+	/*
+	 *  Create the Kafka headers for the derived VPs
+	 *
+	 */
 	num_vps = fr_pair_list_num_elements(&header_vps);
 	if (num_vps == 0)
 		return 0;
 
-        hdrs = rd_kafka_headers_new(num_vps);
+	hdrs = rd_kafka_headers_new(num_vps);
 	fr_pair_list_foreach(&header_vps, vp) {
 		rd_kafka_resp_err_t err;
 		char *value;
@@ -477,311 +413,216 @@ static int create_headers(request_t *request, const char *in, rd_kafka_headers_t
 			rd_kafka_headers_destroy(hdrs);
 			return -1;
 		}
-   	}
+	}
 
-        *out = hdrs;
-        return 0;
+	*out = hdrs;
+	return 0;
 
 }
 
 /*
  *  Format is one of the following:
  *
- *  - "%{kafka:<topic> (<header-list>) &Key-Attr-Ref <message data>}"
- *  - "%{kafka:<topic> (<header-list>)  <message data>}"  (no key => space)
- *  - "%{kafka:<topic> &Key-Attr-Ref <message data>}"
- *  - "%{kafka:<topic>  <message data>}"                  (no key => space)
+ *  - %kafka("<topic>", "<key>", "<message>", "<headers>")
  *
  */
-// static xlat_action_t kafka_xlat(TALLOC_CTX *ctx, fr_dcursor_t *out,
-// 	UNUSED xlat_ctx_t const *xctx, UNUSED request_t *request,
-// 	fr_value_box_list_t *in)
-// {
+static xlat_action_t kafka_xlat(UNUSED TALLOC_CTX *ctx, UNUSED fr_dcursor_t *out,
+	UNUSED xlat_ctx_t const *xctx, UNUSED request_t *request,
+	fr_value_box_list_t *in)
+{
 
-// 	rlm_kafka_t const	*inst = talloc_get_type_abort_const(xctx->mctx->mi->data, rlm_kafka_t);
+	rlm_kafka_t const	*inst = talloc_get_type_abort_const(xctx->mctx->mi->data, rlm_kafka_t);
+	rkt_by_name_entry_t	*entry, my_topic;
+	rd_kafka_headers_t	*hdrs = NULL;
 
-//         char const              *p = fmt, *q;
-//         ssize_t                 key_len = 0;
-//         char                    *expanded = NULL;
-//         char                    *headers = NULL;
-//         char                    buf[256];
-//         rkt_by_name_entry_t	*entry, my_topic;
-//         rd_kafka_headers_t      *hdrs = NULL;
+	fr_value_box_t		*topic_vb;
+	fr_value_box_t		*key_vb;
+	fr_value_box_t		*message_vb;
+	fr_value_box_t		*headers_vb;
 
-//         union {
-//                 const uint8_t *key_const;
-//                 char* const key_unconst;
-//         } k;
-//         k.key_const = NULL;
+	XLAT_ARGS(in, &topic_vb, &key_vb, &message_vb, &headers_vb);
 
-//         *out = '\0';
+	if (topic_vb->vb_length == 0) {
+		REDEBUG("Kafka topic may not be empty");
+		return XLAT_ACTION_FAIL;
+	}
 
-//         /*
-//          *  Extract and lookup the topic.
-//          *
-//          */
-//         p = strchr(fmt, ' ');
-//         if (!p || *fmt == ' ' || *(p+1) == '\0') {
-//                 REDEBUG("Kafka xlat must begin with a topic, optionally followed by headers, then the payload");
-// error:
-//                 talloc_free(expanded);
-//                 if (hdrs) rd_kafka_headers_destroy(hdrs);
-//                 return -1;
-//         }
-//         if ((size_t)(p - fmt) >= sizeof(buf)) {
-//                 REDEBUG("Insufficient space to store Kafka topic name, needed %zu bytes, have %zu bytes",
-//                         (p - fmt) + 1, sizeof(buf));
-//                 goto error;
-//         }
-//         strlcpy(buf, fmt, (p - fmt) + 1);
-//         p++;
+	my_topic.name = topic_vb->vb_strvalue;
+	entry = fr_rb_find(inst->rkt_by_name_tree, &my_topic);
+	if (!entry || !entry->rkt) {
+		REDEBUG("No configuration section exists for kafka topic \"%s\"", topic_vb->vb_strvalue);
+		return XLAT_ACTION_FAIL;
+	}
 
-//         my_topic.name = buf;
-//         entry = rbtree_finddata(inst->rkt_by_name_tree, &my_topic);
-//         if (!entry || !entry->rkt) {
-//                 RWARN("No configuration section exists for kafka topic \"%s\"", buf);
-//                 goto error;
-//         }
+	if (key_vb->vb_length > 0)
+		RDEBUG3("message key=%.*s\n", (int)key_vb->vb_length, key_vb->vb_strvalue);
 
-//         /*
-//          *  Extract the header specification, and generate the headers
-//          *
-//          */
-//         q = p;
-//         if (*p == '(') {
-//                 p = strchr(p, ')');
-//                 if (!p) {
-//                         REDEBUG("Header list is missing closing parenthesis)");
-//                         goto error;
-//                 }
-//                 MEM(headers = talloc_strndup(NULL, q + 1, p - q - 1));
-//                 if (*headers && create_headers(request, headers, &hdrs) < 0) {
-//                         REDEBUG("Failed to create headers");
-//                         talloc_free(headers);
-//                         goto error;
-//                 }
-//                 talloc_free(headers);
-//                 p++;
-//                 if (*p != ' ') {
-//                         REDEBUG("Kafka xlat must begin with a topic, optionally followed by headers, then the payload");
-//                         goto error;
-//                 }
-//                 p++;
-//         }
+	if (headers_vb && create_headers(request, headers_vb->vb_strvalue, &hdrs) < 0) {
+		REDEBUG("Failed to create headers");
+		return XLAT_ACTION_FAIL;
+	}
 
-//         /*
-//          *  Extract the key, if there is one, otherwise expect a space.
-//          *
-//          */
-//         q = p;
-//         if (*p == '&') {
-//                 p = strchr(p, ' ');
-//                 if (!p) {
-//                         REDEBUG("Key attribute form requires a message after the key (... &Key-Attr-Ref <message data>)");
-//                         goto error;
-//                 }
+	kafka_produce(inst, request, entry->rkt,
+		UNCONST(char *const, key_vb->vb_strvalue), key_vb->vb_length,
+		UNCONST(char *const, message_vb->vb_strvalue), message_vb->vb_length,
+		hdrs, inst->async);
 
-//                 if ((size_t)(p - q) >= sizeof(buf)) {
-//                         REDEBUG("Insufficient space to store key attribute ref, needed %zu bytes, have %zu bytes",
-//                                 (p - q) + 1, sizeof(buf));
-//                         goto error;
-//                 }
-//                 strlcpy(buf, q, (p - q) + 1);
+	return XLAT_ACTION_DONE;
 
-//                 key_len = xlat_fmt_to_ref(&k.key_const, request, buf);
-//                 if (key_len < 0) goto error;
-
-//                 RDEBUG3("message key=%.*s\n", (int)key_len, k.key_const);
-//         } else if (*p != ' ') {
-//                 /*
-//                  * Require a space to disambiguate data starting with "&"
-//                  *
-//                  */
-//                 REDEBUG("Kafka payload must begin with an attribute reference or a space");
-//                 goto error;
-//         }
-
-//         p++;
-
-//         /*
-//          *  The remainder is the message.
-//          *
-//          */
-//         if (radius_axlat(&expanded, request, p, NULL, NULL) < 0) {
-//                 REDEBUG("Message expansion failed");
-//                 goto error;
-//         }
-
-//         kafka_produce(inst, request, entry->rkt, k.key_unconst, key_len,
-//                       expanded, strlen(expanded), hdrs, inst->async);
-
-//         talloc_free(expanded);
-
-// 	return XLAT_ACTION_DONE;
-
-// }
+}
 
 static int8_t rkt_by_name_cmp(void const *one, void const *two)
 {
-        rkt_by_name_entry_t const *a = (rkt_by_name_entry_t const *) one;
-        rkt_by_name_entry_t const *b = (rkt_by_name_entry_t const *) two;
+	rkt_by_name_entry_t const *a = (rkt_by_name_entry_t const *) one;
+	rkt_by_name_entry_t const *b = (rkt_by_name_entry_t const *) two;
 
-        return CMP(strcmp(a->name, b->name), 0);
+	return CMP(strcmp(a->name, b->name), 0);
 }
 
 static int destruct_entry(rkt_by_name_entry_t *entry) {
-        /*
-         *  Destroy rkt only if we are the owner (not a reference)
-         *
-         */
-        if (!entry->ref && entry->rkt)
-                rd_kafka_topic_destroy(entry->rkt);
-        entry->rkt = NULL;
-        return 0;
+	/*
+	 *  Destroy rkt only if we are the owner (not a reference)
+	 *
+	 */
+	if (!entry->ref && entry->rkt)
+		rd_kafka_topic_destroy(entry->rkt);
+	entry->rkt = NULL;
+	return 0;
 }
 
 static void rkt_by_name_free(void *data)
 {
-        rkt_by_name_entry_t *entry = (rkt_by_name_entry_t *) data;
-        talloc_free(entry);
+	rkt_by_name_entry_t *entry = (rkt_by_name_entry_t *) data;
+	talloc_free(entry);
 }
 
 static int instantiate_topic(CONF_SECTION *cs, rlm_kafka_t *inst, char *errstr) {
 
-        CONF_PAIR               *cp;
-        rd_kafka_topic_conf_t   *tconf;
-        rd_kafka_topic_t        *rkt;
-        bool                    ref = false;
-        rkt_by_name_entry_t	*entry = NULL;
-        const char              *name = cf_section_name2(cs);
+	CONF_PAIR		*cp;
+	rd_kafka_topic_conf_t	*tconf;
+	rd_kafka_topic_t	*rkt;
+	bool			ref = false;
+	rkt_by_name_entry_t	*entry = NULL;
+	const char		*name = cf_section_name2(cs);
 
-        /*
-         *  Short circuit for when we are given a reference to an existing topic
-         *
-         */
-        cp = cf_pair_find_next(cs, NULL, NULL);
-        if (cp) {
-                char const *attr = cf_pair_attr(cp);
-                char const *value = cf_pair_value(cp);
+	/*
+	 *  Short circuit for when we are given a reference to an existing topic
+	 *
+	 */
+	cp = cf_pair_find_next(cs, NULL, NULL);
+	if (cp) {
+		char const *attr = cf_pair_attr(cp);
+		char const *value = cf_pair_value(cp);
 
-                if (strcmp(attr, "reference") == 0) {
-                        rkt_by_name_entry_t my_topic;
+		if (strcmp(attr, "reference") == 0) {
+			rkt_by_name_entry_t my_topic;
 
-                        my_topic.name = value;
-                        entry = fr_rb_find(inst->rkt_by_name_tree, &my_topic);
-                        if (!entry || !entry->rkt) {
-                                ERROR("Couldn't reference Kafka topic \"%s\" for \"%s\"",
-                                      value, cf_section_name2(cs));
-                                return -1;
-                        }
-                        if (cf_pair_find_next(cs, cp, NULL)) {
-                                ERROR("A reference for another Kafka topic must be the only attribute");
-                                return -1;
-                        }
-                        DEBUG3("Kafka topic \"%s\" configured as a reference to \"%s\"",
-                               cf_section_name2(cs), value);
-                        rkt = entry->rkt;
-                        ref = true;
-                        goto finalise;
-                }
-        }
+			my_topic.name = value;
+			entry = fr_rb_find(inst->rkt_by_name_tree, &my_topic);
+			if (!entry || !entry->rkt) {
+				ERROR("Couldn't reference Kafka topic \"%s\" for \"%s\"",
+				      value, cf_section_name2(cs));
+				return -1;
+			}
+			if (cf_pair_find_next(cs, cp, NULL)) {
+				ERROR("A reference for another Kafka topic must be the only attribute");
+				return -1;
+			}
+			DEBUG3("Kafka topic \"%s\" configured as a reference to \"%s\"",
+			       cf_section_name2(cs), value);
+			rkt = entry->rkt;
+			ref = true;
+			goto finalise;
+		}
+	}
 
-        /*
-         *  Configuration for the new topic
-         *
-         */
-        tconf = rd_kafka_topic_conf_new();
+	/*
+	 *  Configuration for the new topic
+	 *
+	 */
+	tconf = rd_kafka_topic_conf_new();
 
-        /*
-         *  When synchronous, don't block for longer than a typical request timeout.
-         *
-         *  Can be overridden by message.timeout.ms in the topic conf_section
-         */
-        if (!inst->async)
-                RLM_KAFKA_TOPIC_PROP_SET(tconf, "message.timeout.ms", "30000", errstr);
+	/*
+	 *  When synchronous, don't block for longer than a typical request timeout.
+	 *
+	 *  Can be overridden by message.timeout.ms in the topic conf_section
+	 */
+	if (!inst->async)
+		RLM_KAFKA_TOPIC_PROP_SET(tconf, "message.timeout.ms", "30000", errstr);
 
-        /*
-         *  Set topic properties from the topic conf_section
-         */
-        cp = NULL;
-        do {
+	/*
+	 *  Set topic properties from the topic conf_section
+	 */
+	cp = NULL;
+	do {
 
-                cp = cf_pair_find_next(cs, cp, NULL);
-                if (cp) {
-                        char const *attr = cf_pair_attr(cp);
-                        char const *value = cf_pair_value(cp);
-                        if (strcmp(attr, "name") == 0) {  /* Override section name */
-                                name = value;
-                                continue;
-                        } else if (strcmp(attr, "reference") == 0) {
-                                ERROR("A reference for another Kafka topic must be the only attribute");
-                                rd_kafka_topic_conf_destroy(tconf);
-                                return -1;
-                        }
-                        RLM_KAFKA_TOPIC_PROP_SET(tconf, attr, value, errstr);
-                }
-        } while (cp != NULL);
+		cp = cf_pair_find_next(cs, cp, NULL);
+		if (cp) {
+			char const *attr = cf_pair_attr(cp);
+			char const *value = cf_pair_value(cp);
+			if (strcmp(attr, "name") == 0) {  /* Override section name */
+				name = value;
+				continue;
+			} else if (strcmp(attr, "reference") == 0) {
+				ERROR("A reference for another Kafka topic must be the only attribute");
+				rd_kafka_topic_conf_destroy(tconf);
+				return -1;
+			}
+			RLM_KAFKA_TOPIC_PROP_SET(tconf, attr, value, errstr);
+		}
+	} while (cp != NULL);
 
-        /*
-         *  Show the topic configurations for debugging
-         */
-        if (fr_debug_lvl >= L_DBG_LVL_3) {
-                size_t          cnt, i;
-                const char      **arr;
+	/*
+	 *  Show the topic configurations for debugging
+	 */
+	if (fr_debug_lvl >= L_DBG_LVL_3) {
+		size_t		cnt, i;
+		const char	**arr;
 
-                DEBUG3("Configuration for Kafka topic \"%s\":", name);
-                for (i = 0, arr = rd_kafka_topic_conf_dump(tconf, &cnt); i < cnt; i += 2)
-                        DEBUG3("\t%s = %s", arr[i], arr[i + 1]);
-        }
+		DEBUG3("Configuration for Kafka topic \"%s\":", name);
+		for (i = 0, arr = rd_kafka_topic_conf_dump(tconf, &cnt); i < cnt; i += 2)
+			DEBUG3("\t%s = %s", arr[i], arr[i + 1]);
+	}
 
-        /*
-         *  And create the topic according to the configuration.
-         *
-         *  Upon success, the rkt assumes responsibility for tconf
-         *
-         */
-        rkt = rd_kafka_topic_new(inst->rk, name, tconf);
-        if (!rkt) {
-                ERROR("Failed to create Kafka topic \"%s\"", name);
-                rd_kafka_topic_conf_destroy(tconf);
-                return -1;
-        }
+	/*
+	 *  And create the topic according to the configuration.
+	 *
+	 *  Upon success, the rkt assumes responsibility for tconf
+	 *
+	 */
+	rkt = rd_kafka_topic_new(inst->rk, name, tconf);
+	if (!rkt) {
+		ERROR("Failed to create Kafka topic \"%s\"", name);
+		rd_kafka_topic_conf_destroy(tconf);
+		return -1;
+	}
 
 finalise:
 
-        /*
-         *  Finally insert the entry into the rbtree.
-         *
-         */
-        entry = talloc(NULL, rkt_by_name_entry_t);
-        if (!entry)
-                return -1;
-        talloc_set_destructor(entry, destruct_entry);
-        entry->name = talloc_strdup(entry, cf_section_name2(cs));
-        if (!entry->name) {
-        fail:
-                talloc_free(entry);
-                return -1;
-        }
-        entry->rkt = rkt;
-        entry->ref = ref;
+	/*
+	 *  Finally insert the entry into the rbtree.
+	 *
+	 */
+	entry = talloc(NULL, rkt_by_name_entry_t);
+	if (!entry)
+		return -1;
+	talloc_set_destructor(entry, destruct_entry);
+	entry->name = talloc_strdup(entry, cf_section_name2(cs));
+	if (!entry->name) {
+	fail:
+		talloc_free(entry);
+		return -1;
+	}
+	entry->rkt = rkt;
+	entry->ref = ref;
 
-        if (!fr_rb_insert(inst->rkt_by_name_tree, entry))
-                goto fail;
+	if (!fr_rb_insert(inst->rkt_by_name_tree, entry))
+		goto fail;
 
-        DEBUG("Created Kafka topic for \"%s\"", name);
+	DEBUG("Created Kafka topic for \"%s\"", name);
 
-        return 0;
+	return 0;
 
-}
-
-static inline void set_section_rkt(rlm_kafka_t *inst, rlm_kafka_section_config_t *section)
-{
-        rkt_by_name_entry_t *entry, my_topic;
-
-        my_topic.name = cf_section_name1(section->cs);
-        entry = fr_rb_find(inst->rkt_by_name_tree, &my_topic);
-        section->rkt = entry && entry->rkt ? entry->rkt : NULL;
 }
 
 static int mod_bootstrap(module_inst_ctx_t const *mctx)
@@ -789,17 +630,16 @@ static int mod_bootstrap(module_inst_ctx_t const *mctx)
 
 	xlat_t *xlat;
 
-        static xlat_arg_parser_t const kafka_xlat_args[] = {
-                { .required = true, .concat = true, .type = FR_TYPE_STRING },
-                XLAT_ARG_PARSER_TERMINATOR
-        };
+	static xlat_arg_parser_t const kafka_xlat_args[] = {
+		{ .required = true, .single = true, .type = FR_TYPE_STRING },	/* Topic */
+		{ .required = true, .concat = true, .type = FR_TYPE_STRING },	/* Key */
+		{ .required = true, .concat = true, .type = FR_TYPE_STRING },	/* Message */
+		{ .concat = true, .type = FR_TYPE_STRING },			/* Headers */
+		XLAT_ARG_PARSER_TERMINATOR
+	};
 
-// TODO
-        // xlat = module_rlm_xlat_register(mctx->mi->boot, mctx, NULL, kafka_xlat, FR_TYPE_SIZE);
-	// xlat_func_args_set(xlat, kafka_xlat_args);
-	(void)mctx;
-	(void)kafka_xlat_args;
-	(void)xlat;
+	xlat = module_rlm_xlat_register(mctx->mi->boot, mctx, NULL, kafka_xlat, FR_TYPE_SIZE);
+	xlat_func_args_set(xlat, kafka_xlat_args);
 
 	return 0;
 
@@ -809,286 +649,153 @@ static int mod_bootstrap(module_inst_ctx_t const *mctx)
 static int mod_detach(module_detach_ctx_t const *mctx)
 {
 	rlm_kafka_t		*inst = talloc_get_type_abort(mctx->mi->data, rlm_kafka_t);
-        rd_kafka_resp_err_t     err;
+	rd_kafka_resp_err_t	err;
 
-        if (inst->stats_file) {
-                DEBUG3("Closing Kafka statistics file");
-                fclose(inst->stats_file);
-        }
+	if (inst->stats_file) {
+		DEBUG3("Closing Kafka statistics file");
+		fclose(inst->stats_file);
+	}
 
-        DEBUG3("Flushing Kafka queues");
-        if ((err = rd_kafka_flush(inst->rk, 10*1000)) == RD_KAFKA_RESP_ERR__TIMED_OUT)
-                ERROR("Flush failed: %s\n", rd_kafka_err2str(err));
+	DEBUG3("Flushing Kafka queues");
+	if ((err = rd_kafka_flush(inst->rk, 10*1000)) == RD_KAFKA_RESP_ERR__TIMED_OUT)
+		ERROR("Flush failed: %s\n", rd_kafka_err2str(err));
 
-        talloc_free(inst->rkt_by_name_tree);
+	talloc_free(inst->rkt_by_name_tree);
 
-        rd_kafka_destroy(inst->rk);
+	rd_kafka_destroy(inst->rk);
 
 	return 0;
 }
-
 
 static int mod_instantiate(module_inst_ctx_t const *mctx)
 {
 	rlm_kafka_t		*inst = talloc_get_type_abort(mctx->mi->data,rlm_kafka_t);
 	CONF_SECTION 		*conf = mctx->mi->conf;
-	rd_kafka_conf_t         *kconf;
-        char                    errstr[512];
-        CONF_PAIR               *cp = NULL;
-        CONF_SECTION            *cs = NULL;
+	rd_kafka_conf_t		*kconf;
+	char			errstr[512];
+	CONF_PAIR		*cp = NULL;
+	CONF_SECTION		*cs = NULL;
 
 	inst->name = mctx->mi->name;
 
-        /*
-         *  Configuration for the global producer
-         */
-        kconf = rd_kafka_conf_new();
+	/*
+	 *  Configuration for the global producer
+	 */
+	kconf = rd_kafka_conf_new();
 
-        rd_kafka_conf_set_opaque(kconf, inst);
+	rd_kafka_conf_set_opaque(kconf, inst);
 
-        DEBUG3("Registering Kafka logging callback");
-        rd_kafka_conf_set_log_cb(kconf, log_cb);
+	DEBUG3("Registering Kafka logging callback");
+	rd_kafka_conf_set_log_cb(kconf, log_cb);
 
-        DEBUG3("Registering Kafka delivery report callback");
-        rd_kafka_conf_set_dr_msg_cb(kconf, dr_msg_cb);
+	DEBUG3("Registering Kafka delivery report callback");
+	rd_kafka_conf_set_dr_msg_cb(kconf, dr_msg_cb);
 
-        if (inst->stats_filename) {
-                DEBUG3("Opening Kafka statistics file for writing: %s", inst->stats_filename);
-                inst->stats_file = fopen(inst->stats_filename, "a");
-                if (!inst->stats_file) {
-                        ERROR("Error opening Kafka statistics file: %s", inst->stats_filename);
-                        /* Carry on, just don't log stats */
-                } else {
-                        DEBUG3("Registering Kafka statistics callback");
-                        rd_kafka_conf_set_stats_cb(kconf, stats_cb);
-                }
-        }
+	if (inst->stats_filename) {
+		DEBUG3("Opening Kafka statistics file for writing: %s", inst->stats_filename);
+		inst->stats_file = fopen(inst->stats_filename, "a");
+		if (!inst->stats_file) {
+			ERROR("Error opening Kafka statistics file: %s", inst->stats_filename);
+			/* Carry on, just don't log stats */
+		} else {
+			DEBUG3("Registering Kafka statistics callback");
+			rd_kafka_conf_set_stats_cb(kconf, stats_cb);
+		}
+	}
 
-        RLM_KAFKA_PROP_SET(kconf, "bootstrap.servers", inst->bootstrap, errstr);
+	RLM_KAFKA_PROP_SET(kconf, "bootstrap.servers", inst->bootstrap, errstr);
 
-        /*
-         *  Set global properties from the global conf_section
-         */
-        do {
-                CONF_SECTION *gc = cf_section_find(conf, "global-config", NULL);
+	/*
+	 *  Set global properties from the global conf_section
+	 */
+	do {
+		CONF_SECTION *gc = cf_section_find(conf, "global-config", NULL);
 
-                cp = cf_pair_find_next(gc, cp, NULL);
-                if (cp) {
-                        char const *attr, *value;
-                        attr = cf_pair_attr(cp);
-                        value = cf_pair_value(cp);
-                        RLM_KAFKA_PROP_SET(kconf, attr, value, errstr);
-                }
-        } while (cp != NULL);
+		cp = cf_pair_find_next(gc, cp, NULL);
+		if (cp) {
+			char const *attr, *value;
+			attr = cf_pair_attr(cp);
+			value = cf_pair_value(cp);
+			RLM_KAFKA_PROP_SET(kconf, attr, value, errstr);
+		}
+	} while (cp != NULL);
 
-        /*
-         *  When configured to send synchronously, avoid plugging the requests
-         *  since we are not batching and desire immediate responses.
-         *
-         *  Overrides and linger.ms that is set in the global conf_section.
-         */
-        if (!inst->async)
-                RLM_KAFKA_PROP_SET(kconf, "linger.ms", "0", errstr);
+	/*
+	 *  When configured to send synchronously, avoid plugging the requests
+	 *  since we are not batching and desire immediate responses.
+	 *
+	 *  Overrides and linger.ms that is set in the global conf_section.
+	 */
+	if (!inst->async)
+		RLM_KAFKA_PROP_SET(kconf, "linger.ms", "0", errstr);
 
-        /*
-         *  Show the global configuration for debugging
-         */
-        if (fr_debug_lvl >= L_DBG_LVL_3) {
-                size_t          cnt, i;
-                const char      **arr;
+	/*
+	 *  Show the global configuration for debugging
+	 */
+	if (fr_debug_lvl >= L_DBG_LVL_3) {
+		size_t		cnt, i;
+		const char	**arr;
 
-                DEBUG3("Kafka global configuration:");
-                for (i = 0, arr = rd_kafka_conf_dump(kconf, &cnt); i < cnt; i += 2)
-                        DEBUG3("\t%s = %s", arr[i], arr[i + 1]);
-        }
+		DEBUG3("Kafka global configuration:");
+		for (i = 0, arr = rd_kafka_conf_dump(kconf, &cnt); i < cnt; i += 2)
+			DEBUG3("\t%s = %s", arr[i], arr[i + 1]);
+	}
 
-       /*
-         *  And create the producer according to the configuration, which sets
-         *  up a separate handler ("rdk:main") thread and a set of
-         *  "rdk:brokerN" threads, one per broker.
-         *
-         *  librdkafka attempts a lot of blunt (unconfigurable), global
-         *  initialisation of dependent libraries here:
-         *
-         *    - cJSON library has it's allocation functions overridden, but
-         *      just to wrappers around malloc / realloc / free, etc. so this
-         *      is harmless.
-         *    - An attempt is made to initialise cURL, however the cURL library
-         *      maintains a reference count that prevents duplicate
-         *      reinitialisation.
-         *    - Cyrus SASL is similarly reference counted.
-         *    - For OpenSSL < 1.1.0 there is an attempted reinitialisation that
-         *      would clobber settings so at build time we enforce a minimum
-         *      version that no longer requires global initialisation.
-         *
-         *  There may still be unknown cases where other module's configuration
-         *  is trampled on, so best to test overall server functionality
-         *  carefully when enabling this module.
-         *
-         */
-        inst->rk = rd_kafka_new(RD_KAFKA_PRODUCER, kconf, errstr, sizeof(errstr));
-        if (!inst->rk) {
-                ERROR("Failed to create new Kafka producer: %s\n", errstr);
-                rd_kafka_conf_destroy(kconf);
-                return -1;
-        }
+	/*
+	 *  And create the producer according to the configuration, which sets
+	 *  up a separate handler ("rdk:main") thread and a set of
+	 *  "rdk:brokerN" threads, one per broker.
+	 *
+	 *  librdkafka attempts a lot of blunt (unconfigurable), global
+	 *  initialisation of dependent libraries here:
+	 *
+	 *    - cJSON library has it's allocation functions overridden, but
+	 *      just to wrappers around malloc / realloc / free, etc. so this
+	 *      is harmless.
+	 *    - An attempt is made to initialise cURL, however the cURL library
+	 *      maintains a reference count that prevents duplicate
+	 *      reinitialisation.
+	 *    - Cyrus SASL is similarly reference counted.
+	 *    - For OpenSSL < 1.1.0 there is an attempted reinitialisation that
+	 *      would clobber settings so at build time we enforce a minimum
+	 *      version that no longer requires global initialisation.
+	 *
+	 *  There may still be unknown cases where other module's configuration
+	 *  is trampled on, so best to test overall server functionality
+	 *  carefully when enabling this module.
+	 *
+	 */
+	inst->rk = rd_kafka_new(RD_KAFKA_PRODUCER, kconf, errstr, sizeof(errstr));
+	if (!inst->rk) {
+		ERROR("Failed to create new Kafka producer: %s\n", errstr);
+		rd_kafka_conf_destroy(kconf);
+		return -1;
+	}
 
-        /*
-         *  Instantiate a topic for each named topic-config section
-         *
-         */
+	/*
+	 *  Instantiate a topic for each named topic-config section
+	 *
+	 */
 	inst->rkt_by_name_tree = fr_rb_inline_talloc_alloc(inst, rkt_by_name_entry_t, node, rkt_by_name_cmp, rkt_by_name_free);
-        if (!inst->rkt_by_name_tree) return -1;
+	if (!inst->rkt_by_name_tree) return -1;
 
 	while ((cs = cf_section_find_next(conf, cs, "topic-config", CF_IDENT_ANY))) {
 
-                if (!cf_section_name2(cs))
-                        continue;
+		if (!cf_section_name2(cs))
+			continue;
 
-                if (instantiate_topic(cs, inst, errstr) != 0) {
-                        ERROR("Failed to instantiate new Kafka topic for %s\n",
-                              cf_section_name2(cs));
-                        talloc_free(inst->rkt_by_name_tree);
-                        rd_kafka_destroy(inst->rk);
-                        return -1;
-                }
+		if (instantiate_topic(cs, inst, errstr) != 0) {
+			ERROR("Failed to instantiate new Kafka topic for %s\n",
+			      cf_section_name2(cs));
+			talloc_free(inst->rkt_by_name_tree);
+			rd_kafka_destroy(inst->rk);
+			return -1;
+		}
 
-        }
-
-        /*
-         *  Capture a self-reference for the sections
-         */
-        inst->authorize.cs = cf_section_find(conf, "authorize", NULL);
-        inst->postauth.cs = cf_section_find(conf, "post-auth", NULL);
-        inst->accounting.cs = cf_section_find(conf, "accounting", NULL);
-
-        /*
-         *  Set the rkt for each section, where such configuration exists
-         */
-        set_section_rkt(inst, &inst->authorize);
-        set_section_rkt(inst, &inst->postauth);
-        set_section_rkt(inst, &inst->accounting);
-
-        return 0;
-}
-
-/*
- *      Common code called by everything below.
- */
-static unlang_action_t CC_HINT(nonnull) kafka_do(rlm_rcode_t *p_result, module_ctx_t const *mctx, request_t *request,
-	                                     const rlm_kafka_section_config_t *section)
-{
-
-	rlm_kafka_t		*inst = talloc_get_type_abort(mctx->mi->data, rlm_kafka_t);
-        char                    *key = NULL;
-        char                    *message = NULL;
-        rd_kafka_headers_t      *hdrs = NULL;
-        CONF_ITEM               *item;
-        CONF_PAIR               *cp;
-        const char              *schema;
-        char                    path[FR_MAX_STRING_LEN];
-        char                    *p = path;
-
-        if (!section->cs)
-                RETURN_MODULE_NOOP;
-
-        if (!section->rkt) {
-                RWARN("No configuration exists for Kafka topic for %s section",
-                        cf_section_name1(section->cs));
-                RETURN_MODULE_NOOP;
-        }
-
-        if (section->reference[0] != '.') {
-                *p++ = '.';
-        }
-
-	if (xlat_eval(p, sizeof(path) - (p - path), request, section->reference, NULL, NULL) < 0)
-                RETURN_MODULE_FAIL;
-
-        item = cf_reference_item(NULL, section->cs, path);
-        if (!item) {
-                RDEBUG3("No such configuration item %s", path);
-                RETURN_MODULE_NOOP;
-        }
-        if (cf_item_is_section(item)) {
-                RDEBUG3("Sections are not supported as references");
-                RETURN_MODULE_NOOP;
-        }
-
-        cp = cf_item_to_pair(item);
-        schema = cf_pair_value(cp);
-
-        if (xlat_aeval(request, &message, request, schema, NULL, NULL) < 0) {
-                REDEBUG("Failed to expand message schema");
-                RETURN_MODULE_FAIL;
-        }
-
-        if (section->key) {
-                if (xlat_aeval(request, &key, request, section->key, NULL, NULL) < 0) {
-                        REDEBUG("Failed to expand key");
-                        talloc_free(message);
-                        RETURN_MODULE_FAIL;
-                }
-        }
-
-        if (section->headers) {
-                if (create_headers(request, section->headers, &hdrs) < 0) {
-                        REDEBUG("Failed to create headers");
-                        talloc_free(message);
-                        RETURN_MODULE_FAIL;
-                }
-        }
-
-        if (kafka_produce(inst, request, section->rkt,
-                          key, key ? strlen(key) : 0,
-                          message, strlen(message),
-                          hdrs, inst->async
-                         ) != 0) {
-		talloc_free(key);
-		talloc_free(message);
-                RETURN_MODULE_FAIL;
 	}
 
-        talloc_free(key);
-        talloc_free(message);
-
-        RETURN_MODULE_OK;
-}
-
-
-static unlang_action_t CC_HINT(nonnull) mod_authorize(rlm_rcode_t *p_result, module_ctx_t const *mctx, request_t *request)
-{
-	rlm_kafka_t *inst = talloc_get_type_abort(mctx->mi->data, rlm_kafka_t);
-
-	return kafka_do(p_result, mctx, request, &inst->authorize);
-}
-
-static int mod_thread_instantiate(module_thread_inst_ctx_t const *mctx)
-{
-	rlm_kafka_t	   *inst = talloc_get_type_abort(mctx->mi->data, rlm_kafka_t);
-	rlm_kafka_thread_t *t	 = talloc_get_type_abort(mctx->thread, rlm_kafka_thread_t);
-	(void)inst;
-	(void)t;
-
 	return 0;
 }
-
-static int mod_thread_detach(module_thread_inst_ctx_t const *mctx)
-{
-	rlm_kafka_thread_t *t = talloc_get_type_abort(mctx->thread, rlm_kafka_thread_t);
-	(void)t;
-
-	return 0;
-}
-
-// TODO Is this needed.
-// static void kafka_io_module_signal(module_ctx_t const *mctx, request_t *request, UNUSED fr_signal_t action)
-// {
-// 	rlm_kafka_thread_t *t = talloc_get_type_abort(mctx->thread, rlm_kafka_thread_t);
-// 	(void)t;
-// 	(void)request;
-// }
-
 
 /*
  *	The module name should be the only globally exported symbol.
@@ -1102,22 +809,12 @@ static int mod_thread_detach(module_thread_inst_ctx_t const *mctx)
 extern module_rlm_t rlm_kafka;
 module_rlm_t rlm_kafka = {
 	.common = {
-		.magic		        = MODULE_MAGIC_INIT,
-		.name		        = "kafka",
-		.inst_size	        = sizeof(rlm_kafka_t),
-		.thread_inst_size   	= sizeof(rlm_kafka_thread_t),
-		.config		        = module_config,
+		.magic			= MODULE_MAGIC_INIT,
+		.name			= "kafka",
+		.inst_size		= sizeof(rlm_kafka_t),
+		.config			= module_config,
 		.bootstrap		= mod_bootstrap,
 		.instantiate		= mod_instantiate,
 		.detach			= mod_detach,
-		.thread_instantiate 	= mod_thread_instantiate,
-		.thread_detach      	= mod_thread_detach,
-	},
-	.method_group = {
-		.bindings = (module_method_binding_t[]){
-			{ .section = SECTION_NAME("authenticate", CF_IDENT_ANY), .method = mod_authorize },
-                        { .section = SECTION_NAME("recv", "Access-Request"), .method = mod_authorize },
-			MODULE_BINDING_TERMINATOR
-		}
 	}
 };
