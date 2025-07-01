@@ -30,6 +30,8 @@ RCSID("$Id$")
 
 #include <librdkafka/rdkafka.h>
 
+#include <fcntl.h>
+
 static fr_sbuff_parse_rules_t const header_arg_parse_rules = {
 	.terminals = &FR_SBUFF_TERMS(
 		L("\t"),
@@ -85,6 +87,29 @@ typedef struct rlm_kafka_t {
 
 } rlm_kafka_t;
 
+typedef struct {
+
+	rlm_kafka_t		*inst;
+	rd_kafka_queue_t	*queue;         //!< Per-thread event queue
+	int			event_fd;       //!< Read end of socketpair
+	int			write_fd;       //!< Write end for librdkafka
+	uint64_t		payload;
+
+} rlm_kafka_thread_t;
+
+typedef struct {
+	int             result;             //!< Delivery result (0 = success)
+	char const      *error_msg;         //!< Error message if failed
+} rlm_kafka_rctx_t;
+
+typedef struct {
+	rd_kafka_queue_t    *queue;		//!< Queue to write notification to
+	request_t           *request;		//!< Passed to unlang_interpret_mark_runnable()
+	bool                active;		//!< Set to false if request is cleaned up
+	rlm_kafka_rctx_t    *rctx;		//!< Where we write notification reports
+} kafka_rctx_t;
+
+
 static const conf_parser_t global_config[] = {
 	CONF_PARSER_TERMINATOR
 };
@@ -135,22 +160,29 @@ static int stats_cb (UNUSED rd_kafka_t *rk, char *json, size_t json_len, void *o
 
 static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, UNUSED void *opaque)
 {
-	rd_kafka_resp_err_t	*status;
 	int32_t			broker_id = -1;
 	const char		*persisted = "unknown";
 
+	kafka_rctx_t		*krctx;
+
+
+	DEBUG3("XXXXXXXXXXXXXXXXXXX dr_msg_cb CALLED");
 	/*
-	 *  For synchronous send, acknowledge by writing err into the message's opaque.
+	 *  TODO turn into a "decoupled" mode, where the module usually returns OK without yielding
 	 *
-	 *  Any error is reported immediately by the thread that was waiting for this.
 	 */
+	/*
 	if (rkmessage->_private) {
 		status	= (rd_kafka_resp_err_t *)rkmessage->_private;
 		*status = rkmessage->err;
 		return;
 	}
+	*/
 
-	if (!rkmessage->err) return;
+	if (!rkmessage->_private) {
+		ERROR("rlm_kafka: Delivery report received with NULL opaque data");
+		return;
+	}
 
 #if RD_KAFKA_VERSION >= 0x010500ff
 	broker_id = rd_kafka_message_broker_id(rkmessage);
@@ -172,12 +204,49 @@ static void dr_msg_cb(UNUSED rd_kafka_t *rk, const rd_kafka_message_t *rkmessage
 	}
 #endif
 
-	ERROR("Kafka delivery report '%s' for key: %.*s (%s persisted to broker %" PRId32 ")\n",
+	DEBUG3("Kafka delivery report '%s' for key: %.*s (%s persisted to broker %" PRId32 ")\n",
 	      rd_kafka_err2str(rkmessage->err),
 	      (int)rkmessage->len,
 	      (char *)rkmessage->payload,
 	      persisted,
 	      broker_id);
+
+	krctx = talloc_get_type_abort(rkmessage->_private, kafka_rctx_t);
+
+	/*
+	*  Check if request is still active
+	*/
+	if (!krctx->active) {
+		WARN("rlm_kafka: Delivery report received for inactive request, discarding");
+		talloc_free(krctx);
+		return;
+	}
+
+	/*
+	 *  TODO
+	 *
+	 *  rcode based on !rkmessage->err
+	 *  Set Module-Failure-Message of fail
+	 *  Set attrs for broker_id and persisted?
+	 *
+	 */
+
+	/*
+	 *  Update the result context with delivery status
+	 *  TODO not necessarily needed
+	 */
+	if (rkmessage->err) {
+		krctx->rctx->result = -1;
+		krctx->rctx->error_msg = rd_kafka_err2str(rkmessage->err);
+	} else {
+		krctx->rctx->result = 0;
+		krctx->rctx->error_msg = NULL;
+	}
+
+	/*
+	 *  Mark request as runnable to resume execution
+	 */
+	unlang_interpret_mark_runnable(krctx->request);
 
 }
 
@@ -216,95 +285,46 @@ static void log_cb(UNUSED const rd_kafka_t *rk, int level, UNUSED const char *fa
  */
 
 
-/*
- * A wrapper around rd_kafka_producev() that implements synchronous semantics
- * and retries on queue full.
- *
- */
-#define NO_DELIVERY_REPORT INT_MIN
-#define RETRIES 2
-static int kafka_produce(rlm_kafka_t const *inst, UNUSED request_t *request, rd_kafka_topic_t *rkt,
-			 char* const key, const size_t key_len, char* const message, const size_t len,
-			 rd_kafka_headers_t *hdrs, const bool async) {
+static void kafka_io_xlat_signal(xlat_ctx_t const *xctx, UNUSED request_t *request, UNUSED fr_signal_t action)
+{
 
-	rd_kafka_resp_err_t	status = NO_DELIVERY_REPORT;
-	rd_kafka_resp_err_t	err;
-	int			attempt;
+	kafka_rctx_t *krctx = talloc_get_type_abort(xctx->rctx, kafka_rctx_t);
 
-	/*
-	 *  Non-blocking poll to service queue callbacks
-	 */
-	rd_kafka_poll(inst->rk, 0);
+	switch (action) {
+	case FR_SIGNAL_CANCEL:
+		/*
+		 *  Mark the kafka context as inactive so delivery reports are discarded
+		 */
+		krctx->active = false;
+		break;
 
-	/*
-	 * This is an asynchronous call, on success it will only enqueue the
-	 * message on the internal producer queue.
-	 *
-	 * The actual delivery attempts to the broker are handled by background
-	 * threads.
-	 *
-	 * RD_KAFKA_MSG_F_COPY is set for async delivery to ensure that the
-	 * message persists even after the request is cleaned up.
-	 *
-	 * key is always copied.
-	 *
-	 */
-	for (attempt = 1; attempt <= RETRIES + 1; attempt++) {
-		err = rd_kafka_producev(inst->rk,
-					RD_KAFKA_V_RKT(rkt),
-					RD_KAFKA_V_MSGFLAGS(async ? RD_KAFKA_MSG_F_COPY : 0),
-					RD_KAFKA_V_KEY(key, key_len),
-					RD_KAFKA_V_VALUE(message, len),
-					RD_KAFKA_V_HEADERS(hdrs),
-					RD_KAFKA_V_OPAQUE(async ? NULL : &status),
-					RD_KAFKA_V_END
-				       );
-
-		if (err != RD_KAFKA_RESP_ERR__QUEUE_FULL) break;
-
-		RERROR("Kafka queue full: %s. Produce attempt %d/%d\n",
-		       rd_kafka_err2str(err), attempt, RETRIES + 1);
-		rd_kafka_poll(inst->rk, 1000);
+	default:
+		break;
 	}
-
-	/*
-	 *  If rd_kafka_producev() failed then we still own any headers.
-	 *
-	 */
-	if (err != RD_KAFKA_RESP_ERR_NO_ERROR && hdrs)
-		rd_kafka_headers_destroy(hdrs);
-
-	/*
-	 *  If the delivery is specified as synchronous and we did not
-	 *  encounter an immediate error when producing to the queue then
-	 *  enforce synchronous behaviour. We do this by polling for changes to
-	 *  the stack-allocated err component of the message's opaque made by
-	 *  the delivery report callback once the message is durably received
-	 *  by brokers.
-	 *
-	 *  Note: We cannot implement a local timeout here, otherwise we
-	 *  invalidate the message's stack-allocated opaque as soon as this
-	 *  function exits such that a later callback would write into invalid
-	 *  memory! Instead, we rely on the delivery report callback firing
-	 *  after the topic's message.timeout.ms.
-	 *
-	 */
-	if (!async && err == RD_KAFKA_RESP_ERR_NO_ERROR) {
-		while (status == NO_DELIVERY_REPORT)
-			rd_kafka_poll(inst->rk, 1000);  /* Timeout avoids busy waiting */
-		err = status;
-	}
-
-	if (err != RD_KAFKA_RESP_ERR_NO_ERROR) {
-		RERROR("Failed to produce to Kafka topic: %s: %s\n",
-		       rd_kafka_topic_name(rkt), rd_kafka_err2str(err));
-		return -1;
-	}
-
-	return 0;
 
 }
-#undef NO_DELIVERY_REPORT
+
+static xlat_action_t kafka_xlat_resume(TALLOC_CTX *ctx, fr_dcursor_t *out,
+                              xlat_ctx_t const *xctx,
+                              UNUSED request_t *request, UNUSED fr_value_box_list_t *in)
+{
+
+	kafka_rctx_t		*krctx = talloc_get_type_abort(xctx->rctx, kafka_rctx_t);
+//        rlm_kafka_thread_t	*t = talloc_get_type_abort(xctx->mctx->thread, rlm_kafka_thread_t);
+        fr_value_box_t		*vb;
+
+        MEM(vb = fr_value_box_alloc(ctx, FR_TYPE_BOOL, NULL));
+        vb->vb_bool = krctx->rctx->result;
+
+	// TODO What happens to lifecycle of krctx and rctx if callback never fires?
+	talloc_free(krctx);
+
+        fr_dcursor_insert(out, vb);
+
+        return XLAT_ACTION_DONE;
+
+}
+
 
 static int create_headers(request_t *request, const char *in, rd_kafka_headers_t **out)
 {
@@ -432,15 +452,20 @@ static xlat_action_t kafka_xlat(UNUSED TALLOC_CTX *ctx, UNUSED fr_dcursor_t *out
 {
 
 	rlm_kafka_t const	*inst = talloc_get_type_abort_const(xctx->mctx->mi->data, rlm_kafka_t);
+	rlm_kafka_thread_t	*t = talloc_get_type_abort(xctx->mctx->thread, rlm_kafka_thread_t);
+
 	rkt_by_name_entry_t	*entry, my_topic;
 	rd_kafka_headers_t	*hdrs = NULL;
+	kafka_rctx_t		*krctx;
+	rlm_kafka_rctx_t	*rctx;
+	rd_kafka_resp_err_t	err;
 
 	fr_value_box_t		*topic_vb;
 	fr_value_box_t		*key_vb;
-	fr_value_box_t		*message_vb;
+	fr_value_box_t		*msg_vb;
 	fr_value_box_t		*headers_vb;
 
-	XLAT_ARGS(in, &topic_vb, &key_vb, &message_vb, &headers_vb);
+	XLAT_ARGS(in, &topic_vb, &key_vb, &msg_vb, &headers_vb);
 
 	if (topic_vb->vb_length == 0) {
 		REDEBUG("Kafka topic may not be empty");
@@ -454,20 +479,67 @@ static xlat_action_t kafka_xlat(UNUSED TALLOC_CTX *ctx, UNUSED fr_dcursor_t *out
 		return XLAT_ACTION_FAIL;
 	}
 
-	if (key_vb->vb_length > 0)
-		RDEBUG3("message key=%.*s\n", (int)key_vb->vb_length, key_vb->vb_strvalue);
-
 	if (headers_vb && create_headers(request, headers_vb->vb_strvalue, &hdrs) < 0) {
 		REDEBUG("Failed to create headers");
 		return XLAT_ACTION_FAIL;
 	}
 
-	kafka_produce(inst, request, entry->rkt,
-		UNCONST(char *const, key_vb->vb_strvalue), key_vb->vb_length,
-		UNCONST(char *const, message_vb->vb_strvalue), message_vb->vb_length,
-		hdrs, inst->async);
+	/*
+	 *  Allocate opaque context in NULL talloc context
+	 */
+	krctx = talloc_zero(NULL, kafka_rctx_t);
+	if (!krctx) {
+		RERROR("rlm_kafka: Failed to allocate opaque context");
+		return XLAT_ACTION_FAIL;
+	}
 
-	return XLAT_ACTION_DONE;
+	/*
+	*  Allocate resume context for results
+	*/
+	rctx = talloc_zero(krctx, rlm_kafka_rctx_t);
+	if (!rctx) {
+		ERROR("rlm_kafka: Failed to allocate request context");
+		talloc_free(krctx);
+		return XLAT_ACTION_FAIL;
+	}
+
+	/*
+	*  Initialize opaque context
+	*/
+	krctx->queue = t->queue;
+	krctx->request = request;
+	krctx->active = true;
+	krctx->rctx = rctx;
+
+	RDEBUG3("Producing %ld byte message with key=%.*s\n", msg_vb->vb_length,
+		(int)key_vb->vb_length, key_vb->vb_strvalue);
+
+	err = rd_kafka_producev(
+		inst->rk,
+		RD_KAFKA_V_RKT(entry->rkt),
+		RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY),
+		RD_KAFKA_V_KEY(UNCONST(char *const, key_vb->vb_strvalue), key_vb->vb_length),
+		RD_KAFKA_V_VALUE(UNCONST(char *const, msg_vb->vb_strvalue), msg_vb->vb_length),
+		RD_KAFKA_V_HEADERS(hdrs),
+		RD_KAFKA_V_OPAQUE(krctx),  // TODO detached mode
+		RD_KAFKA_V_END
+				);
+
+	/*
+	 *  If rd_kafka_producev() failed then we still own any headers.
+	 *
+	 */
+	if (err != RD_KAFKA_RESP_ERR_NO_ERROR && hdrs)
+		rd_kafka_headers_destroy(hdrs);
+
+	if (err != RD_KAFKA_RESP_ERR_NO_ERROR) {
+		RERROR("Failed to produce to Kafka topic: %s: %s\n",
+			rd_kafka_topic_name(entry->rkt), rd_kafka_err2str(err));
+		return XLAT_ACTION_FAIL;
+	}
+
+	// TODO Return XLAT_ACTION_DONE in detached mode
+	return unlang_xlat_yield(request, kafka_xlat_resume, kafka_io_xlat_signal, ~FR_SIGNAL_CANCEL, krctx);
 
 }
 
@@ -625,6 +697,52 @@ finalise:
 
 }
 
+static void _kafka_pipe_read(UNUSED fr_event_list_t *el, int fd, UNUSED int flags, void *uctx)
+{
+    rlm_kafka_thread_t	*t = talloc_get_type_abort(uctx, rlm_kafka_thread_t);
+    rd_kafka_event_t	*event;
+    char		buffer[256];
+
+    /*
+     *  Clear the notification by reading from socketpair
+     *  TODO cleaner way?
+     */
+    while (read(fd, buffer, sizeof(buffer)) > 0) {
+        /* Keep reading until empty */
+    }
+
+    /*
+     *  Process all available events
+     */
+    while ((event = rd_kafka_queue_poll(t->queue, 0)) != NULL) {
+        switch (rd_kafka_event_type(event)) {
+        case RD_KAFKA_EVENT_DR:
+	    /*
+             *  Delivery report event - the actual delivery report handling
+             *  was already done by the kafka_delivery_cb() callback when
+             *  this event was created. We just need to clean up the event.
+             */
+            break;
+
+/*
+        case RD_KAFKA_EVENT_ERROR:
+            ERROR("rlm_kafka: Event error: %s", rd_kafka_event_error_string(event));
+            break;
+
+        case RD_KAFKA_EVENT_LOG:
+            DEBUG3("rlm_kafka: %s", rd_kafka_event_log(event)->str);
+            break;
+*/
+
+        default:
+            WARN("rlm_kafka: Received unhandled event type: %d", rd_kafka_event_type(event));
+            break;
+        }
+
+        rd_kafka_event_destroy(event);
+    }
+}
+
 static int mod_bootstrap(module_inst_ctx_t const *mctx)
 {
 
@@ -643,28 +761,6 @@ static int mod_bootstrap(module_inst_ctx_t const *mctx)
 
 	return 0;
 
-}
-
-
-static int mod_detach(module_detach_ctx_t const *mctx)
-{
-	rlm_kafka_t		*inst = talloc_get_type_abort(mctx->mi->data, rlm_kafka_t);
-	rd_kafka_resp_err_t	err;
-
-	if (inst->stats_file) {
-		DEBUG3("Closing Kafka statistics file");
-		fclose(inst->stats_file);
-	}
-
-	DEBUG3("Flushing Kafka queues");
-	if ((err = rd_kafka_flush(inst->rk, 10*1000)) == RD_KAFKA_RESP_ERR__TIMED_OUT)
-		ERROR("Flush failed: %s\n", rd_kafka_err2str(err));
-
-	talloc_free(inst->rkt_by_name_tree);
-
-	rd_kafka_destroy(inst->rk);
-
-	return 0;
 }
 
 static int mod_instantiate(module_inst_ctx_t const *mctx)
@@ -797,6 +893,114 @@ static int mod_instantiate(module_inst_ctx_t const *mctx)
 	return 0;
 }
 
+static int mod_detach(module_detach_ctx_t const *mctx)
+{
+	rlm_kafka_t		*inst = talloc_get_type_abort(mctx->mi->data, rlm_kafka_t);
+	rd_kafka_resp_err_t	err;
+
+	if (inst->stats_file) {
+		DEBUG3("Closing Kafka statistics file");
+		fclose(inst->stats_file);
+	}
+
+	DEBUG3("Flushing Kafka queues");
+	if ((err = rd_kafka_flush(inst->rk, 10*1000)) == RD_KAFKA_RESP_ERR__TIMED_OUT)
+		ERROR("Flush failed: %s\n", rd_kafka_err2str(err));
+
+	talloc_free(inst->rkt_by_name_tree);
+
+	rd_kafka_destroy(inst->rk);
+
+	return 0;
+}
+
+
+static int mod_thread_instantiate(module_thread_inst_ctx_t const *mctx)
+{
+	rlm_kafka_t		*inst = talloc_get_type_abort(mctx->mi->data, rlm_kafka_t);
+	rlm_kafka_thread_t	*t = talloc_get_type_abort(mctx->thread, rlm_kafka_thread_t);
+	int			sockfd[2] = { -1, -1 };
+	int			flags;
+
+	t->inst = inst;
+	t->payload = 1;
+
+	/*
+	*  Kafka event queue per thread
+	*/
+	t->queue = rd_kafka_queue_new(inst->rk);
+	if (!t->queue) {
+		ERROR("rlm_kafka: Failed to create event queue");
+error:
+		if (sockfd[0] >= 0) close(sockfd[0]);
+		if (sockfd[1] >= 0) close(sockfd[1]);
+		if (t->queue) rd_kafka_queue_destroy(t->queue);
+		return -1;
+	}
+
+	/*
+	*  Create socketpair for event notifications
+	*/
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockfd) < 0) {
+		ERROR("Failed to create socketpair: %s", fr_syserror(errno));
+		goto error;
+	}
+
+	fr_assert((sockfd[0] >= 0) && (sockfd[1] >= 0));
+
+	t->event_fd = sockfd[0];  /* Read end */
+	t->write_fd = sockfd[1];  /* Write end */
+
+	/*
+	 *  Make read end non-blocking
+	 *  TODO check if needed
+	 */
+	flags = fcntl(t->event_fd, F_GETFL);
+	if (flags <0) {
+		ERROR("Failed getting socket flags whilst setting O_NONBLOCK");
+		goto error;
+	}
+	flags |= O_NONBLOCK;
+        if (fcntl(t->event_fd, F_SETFL, flags) < 0) {
+		ERROR("rlm_kafka: Failed to set socket non-blocking: %s", fr_syserror(errno));
+		goto error;
+        }
+
+	/*
+	 *  Register read end with event loop
+	 *  TODO do we need _kafka_pipe_error
+	 *  TODO check ctx argument
+	 */
+	if (fr_event_fd_insert(mctx->thread, NULL, mctx->el, t->event_fd,
+			       _kafka_pipe_read, NULL, NULL, t) < 0) {
+		ERROR("rlm_kafka: Failed to register event handler");
+		goto error;
+	}
+
+	// Hack - perhaps DR are only sent to the main queue?
+	rd_kafka_queue_forward(rd_kafka_queue_get_main(inst->rk), t->queue);
+
+
+	/*
+	*  Enable I/O event notifications on the queue
+	*/
+	rd_kafka_queue_io_event_enable(t->queue, t->write_fd, &t->payload, sizeof(t->payload));
+
+	return 0;
+}
+
+static int mod_thread_detach(module_thread_inst_ctx_t const *mctx)
+{
+	rlm_kafka_thread_t *t = talloc_get_type_abort(mctx->thread, rlm_kafka_thread_t);
+
+	if (t->event_fd >= 0) close(t->event_fd);
+	if (t->write_fd >= 0) close(t->write_fd);
+	rd_kafka_queue_destroy(t->queue);
+
+	return 0;
+}
+
+
 /*
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
@@ -816,5 +1020,8 @@ module_rlm_t rlm_kafka = {
 		.bootstrap		= mod_bootstrap,
 		.instantiate		= mod_instantiate,
 		.detach			= mod_detach,
+		.thread_inst_size	= sizeof(rlm_kafka_thread_t),
+		.thread_instantiate	= mod_thread_instantiate,
+		.thread_detach		= mod_thread_detach,
 	}
 };

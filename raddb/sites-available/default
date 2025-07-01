@@ -719,7 +719,7 @@ server default {
 recv Access-Request {
 
 
-%kafka("custom-topic", User-Name, "%{User-Name} %{Filter-Id}", "&Acct-Status-Type &NAS-Identifier")
+%kafka("custom-topic", User-Name, %json.encode("request.[*]"), "&Acct-Status-Type &NAS-Identifier")
 
 return
 
