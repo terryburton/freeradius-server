@@ -57,6 +57,7 @@ $(BUILD_DIR)/tests/modules/%: src/tests/modules/%.unlang $(BUILD_DIR)/tests/modu
 			cat $@.log; \
 			echo "# $@.log"; \
 			echo LANG=C TZ=UTC MODULE_TEST_DIR=$(dir $<) MODULE_TEST_UNLANG=$< $(TESTBIN)/unittest -D share -d src/tests/modules/ -i $@.attrs -f $@.attrs -xx; \
+			$(call test_record,modules,$(lastword $(subst /, ,$(dir $@)))/$(basename $(notdir $@)),FAIL,$@.log); \
 			exit 1; \
 		fi; \
 		FOUND=$$(grep ^$< $@.log | head -1 | sed 's/:.*//;s/.*\[//;s/\].*//'); \
@@ -65,9 +66,11 @@ $(BUILD_DIR)/tests/modules/%: src/tests/modules/%.unlang $(BUILD_DIR)/tests/modu
 			cat $@.log; \
 			echo "# $@.log"; \
 			echo LANG=C TZ=UTC MODULE_TEST_DIR=$(dir $<) MODULE_TEST_UNLANG=$< $(TESTBIN)/unittest -D share -d src/tests/modules/ -i $@.attrs -f $@.attrs -xx; \
+			$(call test_record,modules,$(lastword $(subst /, ,$(dir $@)))/$(basename $(notdir $@)),FAIL,$@.log); \
 			exit 1; \
 		fi \
 	fi
+	@$(call test_record,modules,$(lastword $(subst /, ,$(dir $@)))/$(basename $(notdir $@)),PASS,$@.log)
 	@touch $@
 
 #

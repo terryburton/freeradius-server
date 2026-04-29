@@ -89,6 +89,7 @@ $(BUILD_DIR)/tests/auth/%: $(DIR)/% $(BUILD_DIR)/tests/auth/%.attrs $(TESTBINDIR
 			cat $@.log; \
 			echo "# $@.log"; \
 			echo "TESTDIR=$(notdir $@) $(TESTBIN)/unittest -D share -d src/tests/auth/ -i $@.attrs -f $@.attrs -xxx > $@.log 2>&1"; \
+			$(call test_record,auth,$(notdir $@),FAIL,$@.log); \
 			exit 1; \
 		fi; \
 		FOUND=$$(grep ^$< $@.log | head -1 | sed 's/:.*//;s/.*\[//;s/\].*//'); \
@@ -97,9 +98,11 @@ $(BUILD_DIR)/tests/auth/%: $(DIR)/% $(BUILD_DIR)/tests/auth/%.attrs $(TESTBINDIR
 			cat $@.log; \
 			echo "# $@.log"; \
 			echo "TESTDIR=$(notdir $@) $(TESTBIN)/unittest -D share -d src/tests/auth/ -i $@.attrs -f $@.attrs -xxx > $@.log 2>&1"; \
+			$(call test_record,auth,$(notdir $@),FAIL,$@.log); \
 			exit 1; \
 		fi \
 	fi
+	@$(call test_record,auth,$(notdir $@),PASS,$@.log)
 	@touch $@
 
 #

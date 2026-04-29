@@ -36,8 +36,10 @@ $(BUILD_DIR)/tests/xlat/%: $(DIR)/% $(TESTBINDIR)/unittest | $(BUILD_DIR)/tests/
 	@if ! $(TESTBIN)/unittest -D share -d src/tests/xlat/ -i $< -xx -O xlat_only > $@.log 2>&1; then \
 		cat $@.log; \
 		echo "./$(TESTBIN)/unittest -D share -d src/tests/xlat/ -i $< -xx -O xlat_only"; \
+		$(call test_record,xlat,$(notdir $@),FAIL,$@.log); \
 		exit 1; \
 	fi
+	@$(call test_record,xlat,$(notdir $@),PASS,$@.log)
 	@touch $@
 
 #

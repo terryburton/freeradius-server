@@ -102,6 +102,7 @@ $(BUILD_DIR)/tests/keywords/%: ${DIR}/% $(BUILD_DIR)/tests/keywords/%.attrs $(TE
 			cat $@.log; \
 			echo "# $@.log"; \
 			echo KEYWORD=$(notdir $@) $(TESTBIN)/unittest -D share -d src/tests/keywords/ -i $@.attrs -f $@.attrs -xx; \
+			$(call test_record,keywords,$(notdir $@),FAIL,$@.log); \
 			exit 1; \
 		fi; \
 		FOUND=$$(grep ^$< $@.log | head -1 | sed 's/:.*//;s/.*\[//;s/\].*//'); \
@@ -110,9 +111,11 @@ $(BUILD_DIR)/tests/keywords/%: ${DIR}/% $(BUILD_DIR)/tests/keywords/%.attrs $(TE
 			cat $@.log; \
 			echo "# $@.log"; \
 			echo KEYWORD=$(notdir $@) $(TESTBIN)/unittest -D share -d src/tests/keywords/ -i $@.attrs -f $@.attrs -xx; \
+			$(call test_record,keywords,$(notdir $@),FAIL,$@.log); \
 			exit 1; \
 		fi \
 	fi
+	@$(call test_record,keywords,$(notdir $@),PASS,$@.log)
 	@touch $@
 
 #
