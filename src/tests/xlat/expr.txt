@@ -168,5 +168,6 @@ match 0x9f9d51bc70ef21ca5c14f307980a29d8
 xlat_expr &Service-Type
 match Framed-User
 
+# CI-FAILURE-DEMO: deliberately wrong match value (was 2)
 xlat_expr (uint32) (&Service-Type)
-match 2
+match 999

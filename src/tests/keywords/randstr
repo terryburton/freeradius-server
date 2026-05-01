@@ -8,11 +8,12 @@ if !(result_string == "") {
 	test_fail
 }
 
+# CI-FAILURE-DEMO: deliberately wrong expected length (was 3)
 #
 #  Check length of output
 #
 result_string := "%str.rand('nnn')"
-if (!(%length(result_string) == 3)) {
+if (!(%length(result_string) == 99)) {
 	test_fail
 }
 

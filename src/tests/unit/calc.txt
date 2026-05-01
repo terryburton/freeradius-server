@@ -233,8 +233,9 @@ match
 calc string "12" * uint16 0
 match 
 
+# CI-FAILURE-DEMO: deliberately wrong match value
 calc octets 0xabcd * uint32 4
-match 0xabcdabcdabcdabcd
+match 0xdeadbeefdeadbeef
 
 count
 match 110
