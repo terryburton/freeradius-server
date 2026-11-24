@@ -81,6 +81,9 @@ FreeRADIUS 3.2.11 Wed 03 Jun 2026 12:00:00 UTC urgency=low
 	* Don't use require_ma for CoA / Disconnect packets, as it's not necessary.
 	* Many fixes and tweaks for reverse CoA, which is now running in production.
 	  Patches from CyB0rgg.
+	* When several EAP methods use the same tls-config section, as the
+	  default configuration does, the EAP-TLS fragment size is no longer
+	  reduced by 10 octets for each method.
 
 FreeRADIUS 3.2.10 Wed 03 Jun 2026 12:00:00 UTC urgency=high
 	Configuration changes
