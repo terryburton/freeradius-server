@@ -81,6 +81,12 @@ FreeRADIUS 3.2.11 Wed 03 Jun 2026 12:00:00 UTC urgency=low
 	* Don't use require_ma for CoA / Disconnect packets, as it's not necessary.
 	* Many fixes and tweaks for reverse CoA, which is now running in production.
 	  Patches from CyB0rgg.
+	* When the Access-Request contains Framed-MTU, EAP-TLS, PEAP, TTLS,
+	  FAST and TEAP now subtract the EAPoL, EAP and EAP-TLS headers from it.
+	  EAP packets are now no larger than Framed-MTU less the 4 octets of
+	  EAPoL header, as RFC 3579 requires.  They were up to 10 octets larger.
+	  The first fragment of a PEAP, FAST or TEAP message is now 4 octets
+	  smaller, the same size as the others, with or without a Framed-MTU.
 
 FreeRADIUS 3.2.10 Wed 03 Jun 2026 12:00:00 UTC urgency=high
 	Configuration changes
