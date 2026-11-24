@@ -295,6 +295,20 @@ int eaptls_request(EAP_DS *eap_ds, tls_session_t *ssn, bool start)
 		ssn->tls_msg_len = ssn->dirty_out.used;
 	}
 
+#ifdef TLS1_3_VERSION
+	/*
+	 *	With TLS 1.3, the L bit MUST NOT be set in an
+	 *	unfragmented message (RFC 9190 Section 2.1.9, and RFC
+	 *	9427 Section 2 for the other TLS-based methods).  So
+	 *	include_length applies only to the fragments of a
+	 *	message which is too large for one packet.
+	 */
+	if (lbit && (ssn->fragment == 0) && (SSL_version(ssn->ssl) == TLS1_3_VERSION) &&
+	    ((ssn->dirty_out.used + obit + olen) <= ssn->mtu)) {
+		lbit = 0;
+	}
+#endif
+
 	reply.code = start ? FR_TLS_START : FR_TLS_REQUEST;
 	reply.flags = ssn->peap_flag;
 	if (start) reply.flags = SET_START(reply.flags);

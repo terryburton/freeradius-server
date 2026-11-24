@@ -81,6 +81,10 @@ FreeRADIUS 3.2.11 Wed 03 Jun 2026 12:00:00 UTC urgency=low
 	* Don't use require_ma for CoA / Disconnect packets, as it's not necessary.
 	* Many fixes and tweaks for reverse CoA, which is now running in production.
 	  Patches from CyB0rgg.
+	* With TLS 1.3, EAP-TLS and TTLS no longer set the L bit (and send the
+	  TLS Message Length) in a message which fits in one packet, as
+	  RFC 9190 requires.  "include_length = yes" now applies only to the
+	  fragments of a larger message when TLS 1.3 is used.
 
 FreeRADIUS 3.2.10 Wed 03 Jun 2026 12:00:00 UTC urgency=high
 	Configuration changes
