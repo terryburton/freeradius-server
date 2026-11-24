@@ -81,6 +81,11 @@ FreeRADIUS 3.2.11 Wed 03 Jun 2026 12:00:00 UTC urgency=low
 	* Don't use require_ma for CoA / Disconnect packets, as it's not necessary.
 	* Many fixes and tweaks for reverse CoA, which is now running in production.
 	  Patches from CyB0rgg.
+	* The EAP-TLS fragment size is no longer left in session-state as
+	  Framed-MTU when the TLS session completes.  The default post-auth
+	  copied it into the Access-Accept, where a NAS could apply it as the
+	  user's MTU.  A Framed-MTU which policy puts in session-state is still
+	  sent.
 
 FreeRADIUS 3.2.10 Wed 03 Jun 2026 12:00:00 UTC urgency=high
 	Configuration changes
