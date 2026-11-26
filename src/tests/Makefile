@@ -270,6 +270,11 @@ EAP_TLS_FILES   += peap-mschapv2.conf
 EAP_FRAMED_MTU_FILES  = eap-tls-framed-mtu.conf
 EAP_FRAMED_MTU_FILES += peap-framed-mtu.conf
 
+#
+#  The "test" virtual server adds Framed-MTU = 1300 to session-state for these.
+#
+EAP_SESSION_STATE_FILES = eap-tls-session-state.conf
+
 EAP_TLS_VERSIONS = 1.1 1.2
 EAP_TLS_DISABLE_STRING = tls_disable_tlsv1_0=1 tls_disable_tlsv1_1=1 tls_disable_tlsv1_2=1
 
@@ -320,6 +325,19 @@ FRAGMENT_SIZE_OK = largest=`$(EAP_LARGEST_REQUEST) $(1) | sort -n | tail -1`; [ 
 #
 FRAMED_MTU_OK = largest=`$(EAP_LARGEST_REQUEST) $(1) | sort -n | tail -1`; [ "$$largest" -eq `expr $(2) - 4` ]
 
+$(BUILD_PATH)/tests/eap/%.ok: ACCEPT_FRAMED_MTU = $(if $(filter $(basename $(EAP_SESSION_STATE_FILES)),$(basename $(notdir $@))),1300 accept,accept)
+
+#
+#  The EAP-TLS fragment size is cached in session-state:Framed-MTU, for
+#  the use of an inner tunnel.  It must not be sent in the Access-Accept,
+#  where it would tell the NAS the MTU to configure for the user.  But a
+#  Framed-MTU which policy puts in session-state must still be sent.
+#
+#  List "accept" for the Access-Accepts, so that there must be one, and
+#  the value of each Framed-MTU in them.
+#
+ACCEPT_FRAMED_MTU_SEEN = awk '/^RADIUS message: code=/ { accept = /code=2 /; if (accept) print "accept" } accept && /Attribute 12 \(Framed-MTU\)/ { getline; sub(/.*Value: /, ""); print }' $(1) | LC_ALL=C sort -u | paste -sd ' ' -
+
 $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(BUILD_PATH)/tests/eap radiusd.pid radiusd.kill
 	${Q}printf 'EAPOL_TEST %s ' $(notdir $(patsubst %.conf,%,$<))
 	${Q}if ! $(CMD) > $(LOG) 2>&1; then \
@@ -341,6 +359,13 @@ $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(
 		exit 1; \
 	elif [ -n "$(FRAMED_MTU)" ] && ! { $(call FRAMED_MTU_OK,$(LOG),$(FRAMED_MTU)); }; then \
 		echo " - " FAILED - EAP packets do not fit Framed-MTU $(FRAMED_MTU); \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ "`$(call ACCEPT_FRAMED_MTU_SEEN,$(LOG))`" != "$(ACCEPT_FRAMED_MTU)" ]; then \
+		echo " - " FAILED - Access-Accept missing, or with the wrong Framed-MTU; \
 		echo ">>> cmd -" $(CMD); \
 		echo ">>> log -" $(LOG); \
 		$(MAKE) radiusd.kill; \
@@ -401,6 +426,13 @@ $(BUILD_PATH)/tests/eap/${1}-${2}.ok: $(BUILD_PATH)/tests/eap/${1}-${2}.conf
 		$(MAKE) radiusd.kill; \
 		$$(call test_record,eap,$$(notdir $$(patsubst %.ok,%,$$@)),FAIL,$$(LOG)); \
 		exit 1; \
+	elif [ "`$$(call ACCEPT_FRAMED_MTU_SEEN,$$(LOG))`" != "$$(ACCEPT_FRAMED_MTU)" ]; then \
+		echo " - " FAILED - Access-Accept missing, or with the wrong Framed-MTU; \
+		echo ">>> cmd -" $$(CMD) -r 1; \
+		echo ">>> log -" $$(LOG); \
+		$(MAKE) radiusd.kill; \
+		$$(call test_record,eap,$$(notdir $$(patsubst %.ok,%,$$@)),FAIL,$$(LOG)); \
+		exit 1; \
 	fi
 	@echo
 	${Q}$$(call test_record,eap,$$(notdir $$(patsubst %.ok,%,$$@)),PASS,$$(LOG))
@@ -415,7 +447,7 @@ endef
 $(foreach FILE,$(patsubst %.conf,%,$(EAP_TLS_FILES)),$(foreach TLS,$(EAP_TLS_VERSIONS),$(eval $(call EAP_TLS_CONFIG,${FILE},${TLS}))))
 endif # there's no "prefix", so we don't run the full EAP tests
 
-EAPOL_OK_FILES := $(sort $(addprefix $(BUILD_PATH)/tests/eap/,$(patsubst %.conf,%.ok, $(notdir $(EAP_TLS_FILES) $(EAP_FRAMED_MTU_FILES) $(EAP_FILES)))) $(EAP_TLS_VERSION_FILES))
+EAPOL_OK_FILES := $(sort $(addprefix $(BUILD_PATH)/tests/eap/,$(patsubst %.conf,%.ok, $(notdir $(EAP_TLS_FILES) $(EAP_FRAMED_MTU_FILES) $(EAP_SESSION_STATE_FILES) $(EAP_FILES)))) $(EAP_TLS_VERSION_FILES))
 
 tests.eap: $(EAPOL_OK_FILES) | radiusd.kill radiusd.pid
 else
