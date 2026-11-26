@@ -262,6 +262,12 @@ EAP_TLS_FILES   += peap-mschapv2.conf
 #EAP_TLS_FILES   += eap-fast.conf		# disabled in default config
 #EAP_TLS_FILES   += eap-teap-mschapv2.conf	# not configured in eapol_test
 
+#
+#  The "test" virtual server sets Framed-MTU = 600 for these.
+#
+EAP_FRAMED_MTU_FILES  = eap-tls-framed-mtu.conf
+EAP_FRAMED_MTU_FILES += peap-framed-mtu.conf
+
 EAP_TLS_VERSIONS = 1.1 1.2
 EAP_TLS_DISABLE_STRING = tls_disable_tlsv1_0=1 tls_disable_tlsv1_1=1 tls_disable_tlsv1_2=1
 
@@ -287,6 +293,7 @@ $(BUILD_PATH)/tests/eap/%.ok: NO_MPPE = $(filter eap-md5,$(basename $(notdir $@)
 $(BUILD_PATH)/tests/eap/%.ok: CMD =  $(EAPOL_TEST) -c $< -p $(PORT) -s $(SECRET) $(if $(NO_MPPE),-n)
 $(BUILD_PATH)/tests/eap/%.ok: LOG =  $(patsubst %.ok,%,$@).log
 $(BUILD_PATH)/tests/eap/%.ok: TLS_METHOD = $(filter $(basename $(EAP_TLS_FILES)),$(basename $(notdir $@)))
+$(BUILD_PATH)/tests/eap/%.ok: FRAMED_MTU = $(if $(filter $(basename $(EAP_FRAMED_MTU_FILES)),$(basename $(notdir $@))),600)
 
 #
 #  The length of each EAP packet the server sends, from the eapol_test log.
@@ -300,6 +307,12 @@ EAP_LARGEST_REQUEST = sed -n 's/^decapsulated EAP packet (code=1 id=[0-9]* len=\
 #  fragment only.
 #
 FRAGMENT_SIZE_OK = largest=`$(EAP_LARGEST_REQUEST) $(1) | sort -n | tail -1`; [ "$$largest" -ge 1020 ] && [ "$$largest" -le 1024 ]
+
+#
+#  With a Framed-MTU, the largest EAP packet the server sends must be the
+#  Framed-MTU less the 4 octets of EAPoL header (RFC 3579 Section 2.4).
+#
+FRAMED_MTU_OK = largest=`$(EAP_LARGEST_REQUEST) $(1) | sort -n | tail -1`; [ "$$largest" -eq `expr $(2) - 4` ]
 
 $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(BUILD_PATH)/tests/eap radiusd.pid radiusd.kill
 	${Q}printf 'EAPOL_TEST %s ' $(notdir $(patsubst %.conf,%,$<))
@@ -315,6 +328,13 @@ $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(
 		exit 1; \
 	elif [ -n "$(TLS_METHOD)" ] && ! { $(call FRAGMENT_SIZE_OK,$(LOG)); }; then \
 		echo " - " FAILED - EAP packets do not use fragment_size; \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ -n "$(FRAMED_MTU)" ] && ! { $(call FRAMED_MTU_OK,$(LOG),$(FRAMED_MTU)); }; then \
+		echo " - " FAILED - EAP packets do not fit Framed-MTU $(FRAMED_MTU); \
 		echo ">>> cmd -" $(CMD); \
 		echo ">>> log -" $(LOG); \
 		$(MAKE) radiusd.kill; \
@@ -389,7 +409,7 @@ endef
 $(foreach FILE,$(patsubst %.conf,%,$(EAP_TLS_FILES)),$(foreach TLS,$(EAP_TLS_VERSIONS),$(eval $(call EAP_TLS_CONFIG,${FILE},${TLS}))))
 endif # there's no "prefix", so we don't run the full EAP tests
 
-EAPOL_OK_FILES := $(sort $(addprefix $(BUILD_PATH)/tests/eap/,$(patsubst %.conf,%.ok, $(notdir $(EAP_TLS_FILES) $(EAP_FILES)))) $(EAP_TLS_VERSION_FILES))
+EAPOL_OK_FILES := $(sort $(addprefix $(BUILD_PATH)/tests/eap/,$(patsubst %.conf,%.ok, $(notdir $(EAP_TLS_FILES) $(EAP_FRAMED_MTU_FILES) $(EAP_FILES)))) $(EAP_TLS_VERSION_FILES))
 
 tests.eap: $(EAPOL_OK_FILES) | radiusd.kill radiusd.pid
 else
