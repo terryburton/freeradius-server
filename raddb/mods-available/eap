@@ -389,6 +389,10 @@ eap {
 		#  message is included ONLY in the
 		#  First packet of a fragment series.
 		#
+		#  With TLS 1.3, it is never included in
+		#  a message which fits in one packet, as
+		#  RFC 9190 requires.
+		#
 	#	include_length = yes
 
 
