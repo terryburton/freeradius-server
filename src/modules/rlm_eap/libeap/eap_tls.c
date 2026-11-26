@@ -1323,6 +1323,16 @@ fr_tls_server_conf_t *eaptls_conf_parse(CONF_SECTION *cs, char const *attr)
 	if (!tls_cs)
 		return NULL;
 
+	/*
+	 *	Several EAP methods may use the same tls-config
+	 *	section, which is parsed once and then cached.  If
+	 *	another method has already parsed it, then the checks
+	 *	and the adjustment of the fragment size below have
+	 *	already been done, and must not be done again.
+	 */
+	tls_conf = cf_data_find(tls_cs, "tls-conf");
+	if (tls_conf) return tls_conf;
+
 	tls_conf = tls_server_conf_parse(tls_cs, true);
 
 	if (!tls_conf)
