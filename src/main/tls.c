@@ -5419,6 +5419,25 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 	talloc_ctx = SSL_get_ex_data(ssn->ssl, FR_TLS_EX_INDEX_TALLOC);
 
 	/*
+	 *	tls_new_session() caches the fragment size as the first
+	 *	Framed-MTU in session-state, for the use of an EAP
+	 *	method inside of the TLS tunnel.  It is not a reply
+	 *	attribute: a Framed-MTU in an Access-Accept tells the
+	 *	NAS which MTU to configure for the user (RFC 2865
+	 *	Section 5.12).  So remove that one before post-auth
+	 *	copies session-state to the reply.  Any Framed-MTU
+	 *	which policy added to session-state after it, such as
+	 *	one copied from the inner tunnel's reply, stays.
+	 */
+	{
+		vp_cursor_t cursor;
+
+		fr_cursor_init(&cursor, &request->state);
+		vp = fr_cursor_next_by_num(&cursor, PW_FRAMED_MTU, 0, TAG_ANY);
+		if (vp && (vp->vp_integer == ssn->mtu)) talloc_free(fr_cursor_remove(&cursor));
+	}
+
+	/*
 	 *	If there's no session resumption, delete the entry
 	 *	from the cache.  This means either it's disabled
 	 *	globally for this SSL context, OR we were told to
