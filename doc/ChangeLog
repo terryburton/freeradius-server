@@ -1,3 +1,12 @@
+FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
+	Configuration changes
+
+	Feature improvements
+
+	Bug fixes
+	* Fix the EAP-TLS fragment_size being reduced once for each EAP
+	  method which uses the same tls-config section.
+
 FreeRADIUS 3.2.11 Thu 26 Nov 2026 12:00:00 UTC urgency=high
 	Configuration changes
 	* Add notes on the security of CHAP-Password and MS-CHAP-*

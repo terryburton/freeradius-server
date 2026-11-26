@@ -286,6 +286,20 @@ clean.tests.eap:
 $(BUILD_PATH)/tests/eap/%.ok: NO_MPPE = $(filter eap-md5,$(basename $(notdir $@)))
 $(BUILD_PATH)/tests/eap/%.ok: CMD =  $(EAPOL_TEST) -c $< -p $(PORT) -s $(SECRET) $(if $(NO_MPPE),-n)
 $(BUILD_PATH)/tests/eap/%.ok: LOG =  $(patsubst %.ok,%,$@).log
+$(BUILD_PATH)/tests/eap/%.ok: TLS_METHOD = $(filter $(basename $(EAP_TLS_FILES)),$(basename $(notdir $@)))
+
+#
+#  The length of each EAP packet the server sends, from the eapol_test log.
+#
+EAP_LARGEST_REQUEST = sed -n 's/^decapsulated EAP packet (code=1 id=[0-9]* len=\([0-9]*\)).*/\1/p'
+
+#
+#  The TLS-based methods all use the default fragment_size of 1024.  The
+#  largest EAP packet the server sends must use it: 1020 octets when the TLS
+#  Message Length is in every packet, and 1024 when it is in the first
+#  fragment only.
+#
+FRAGMENT_SIZE_OK = largest=`$(EAP_LARGEST_REQUEST) $(1) | sort -n | tail -1`; [ "$$largest" -ge 1020 ] && [ "$$largest" -le 1024 ]
 
 $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(BUILD_PATH)/tests/eap radiusd.pid radiusd.kill
 	${Q}printf 'EAPOL_TEST %s ' $(notdir $(patsubst %.conf,%,$<))
@@ -296,6 +310,13 @@ $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(
 		echo "===================="; \
 		tail -10 $(LOG); \
 		echo "===================="; \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ -n "$(TLS_METHOD)" ] && ! { $(call FRAGMENT_SIZE_OK,$(LOG)); }; then \
+		echo " - " FAILED - EAP packets do not use fragment_size; \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
 		$(MAKE) radiusd.kill; \
 		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
 		exit 1; \
@@ -342,6 +363,13 @@ $(BUILD_PATH)/tests/eap/${1}-${2}.ok: $(BUILD_PATH)/tests/eap/${1}-${2}.conf
 		exit 1; \
 	elif ! grep -q '^OpenSSL: Handshake finished - resumed=1$$$$' $$(patsubst %.ok,%,$$@).log; then \
 		echo " - " FAILED - did not use resumption; \
+		echo ">>> cmd -" $$(CMD) -r 1; \
+		echo ">>> log -" $$(LOG); \
+		$(MAKE) radiusd.kill; \
+		$$(call test_record,eap,$$(notdir $$(patsubst %.ok,%,$$@)),FAIL,$$(LOG)); \
+		exit 1; \
+	elif ! { $$(call FRAGMENT_SIZE_OK,$$(LOG)); }; then \
+		echo " - " FAILED - EAP packets do not use fragment_size; \
 		echo ">>> cmd -" $$(CMD) -r 1; \
 		echo ">>> log -" $$(LOG); \
 		$(MAKE) radiusd.kill; \
