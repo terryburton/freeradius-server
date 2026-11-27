@@ -5774,9 +5774,14 @@ fr_tls_status_t tls_ack_handler(tls_session_t *ssn, REQUEST *request)
 		REDEBUG("(TLS) Unexpected ACK received:  No ongoing SSL session");
 		return FR_TLS_INVALID;
 	}
+	/*
+	 *	Nothing has been sent but the EAP-TLS Start, which the
+	 *	peer answers with its ClientHello, not with an ACK.  An
+	 *	empty Request would only bring another ACK.
+	 */
 	if (!ssn->info.initialized) {
-		RDEBUG("(TLS) No SSL info available.  Waiting for more SSL data");
-		return FR_TLS_REQUEST;
+		REDEBUG("(TLS) Unexpected ACK received:  We sent only the Start, and the peer sent no ClientHello");
+		return FR_TLS_INVALID;
 	}
 
 	if ((ssn->info.content_type == handshake) && (ssn->info.origin == 0)) {
@@ -5812,8 +5817,18 @@ fr_tls_status_t tls_ack_handler(tls_session_t *ssn, REQUEST *request)
 		return FR_TLS_FAIL;
 
 	case application_data:
-		RDEBUG2("(TLS) Peer ACKed our application data fragment");
-		return FR_TLS_REQUEST;
+		if (ssn->dirty_out.used > 0) {
+			RDEBUG2("(TLS) Peer ACKed our application data fragment");
+			return FR_TLS_REQUEST;
+		}
+
+		/*
+		 *	We sent all of our message, so the peer should have
+		 *	answered with data.  An empty Request would only
+		 *	bring another ACK.
+		 */
+		REDEBUG("(TLS) Cannot continue, as the peer is misbehaving.");
+		return FR_TLS_FAIL;
 
 		/*
 		 *	For the rest of the conditions, switch over
