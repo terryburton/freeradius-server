@@ -15,6 +15,9 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	  helps with firewalls and NAT which silently discard the state of
 	  idle connections, where the next query on a re-used connection
 	  hangs or fails.  See the "pool" section of mods-available/sql.
+	* Fix EAP-pwd ignoring a Framed-MTU just above its fragment_size.
+	* Fix EAP-pwd packets being 9 octets larger than "fragment_size"
+	  allows.  It now has the same meaning as for TLS.
 
 	Bug fixes
 

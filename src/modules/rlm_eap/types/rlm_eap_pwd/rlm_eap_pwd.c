@@ -601,7 +601,13 @@ static int mod_session_init (void *instance, eap_handler_t *handler)
 	/*
 	 *	The admin can dynamically change the MTU.
 	 */
-	session->mtu = inst->fragment_size;
+	/*
+	 *	fragment_size has the same meaning as for TLS, and as a
+	 *	Framed-MTU (below): the EAP packet, plus the EAPoL header.
+	 *	session->mtu is the size of the EAP-pwd data, so subtract
+	 *	the same 9 octets.
+	 */
+	session->mtu = inst->fragment_size - 9;
 	vp = fr_pair_find_by_num(handler->request->packet->vps, PW_FRAMED_MTU, 0, TAG_ANY);
 
 	/*
@@ -613,7 +619,7 @@ static int mod_session_init (void *instance, eap_handler_t *handler)
 	 *	The fragmentation code deals with the included length
 	 *	so we don't need to subtract that here.
 	 */
-	if (vp && (vp->vp_integer > 100) && (vp->vp_integer < session->mtu)) {
+	if (vp && (vp->vp_integer > 100) && ((vp->vp_integer - 9) < session->mtu)) {
 		session->mtu = vp->vp_integer - 9;
 	}
 
