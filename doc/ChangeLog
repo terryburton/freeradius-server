@@ -15,6 +15,8 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	  helps with firewalls and NAT which silently discard the state of
 	  idle connections, where the next query on a re-used connection
 	  hangs or fails.  See the "pool" section of mods-available/sql.
+	* Don't let a peer run TTLS, PEAP, FAST or TEAP inside another
+	  EAP tunnel.
 
 	Bug fixes
 
