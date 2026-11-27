@@ -36,6 +36,9 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	  a "tls-cache" virtual server.
 	* Add "max_rounds" to the EAP module, for sessions which need more
 	  than 50 round trips, e.g. with large certificate chains.
+	* Fix EAP-TLS inside PEAP or TTLS taking two rounds for each inner
+	  packet with CBC ciphers, as the inner packets were too large for
+	  one outer fragment.
 
 	Bug fixes
 

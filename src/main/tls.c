@@ -837,7 +837,16 @@ after_chain:
 	 *	just too much.
 	 */
 	state->mtu = conf->fragment_size;
-#define EAP_TLS_MAGIC_OVERHEAD (63)
+
+	/*
+	 *	An inner packet is sent in a TLS record of the outer
+	 *	session.  The record adds its header (5), and the IV, MAC
+	 *	and padding of the cipher: up to 80 more for CBC with
+	 *	SHA-384.  TTLS adds an AVP header (8) as well.  If the inner
+	 *	packet and that overhead don't fit into one outer fragment,
+	 *	each inner packet takes two outer rounds.
+	 */
+#define EAP_TLS_MAGIC_OVERHEAD (100)
 
 	/*
 	 *	The largest EAP packet we can send is the Framed-MTU
