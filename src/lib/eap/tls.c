@@ -548,11 +548,21 @@ static eap_tls_status_t eap_tls_session_status(request_t *request, eap_session_t
 			 */
 			tls_session->info.content_type = SSL3_RT_APPLICATION_DATA;
 			return EAP_TLS_ESTABLISHED;
-		} /* else more data to send */
+		}
 
-		RDEBUG2("Peer ACKed our handshake fragment");
-		/* Fragmentation handler, send next fragment */
-		return EAP_TLS_RECORD_SEND;
+		if (fr_dbuff_remaining(tls_session->dirty_out) > 0) {
+			RDEBUG2("Peer ACKed our handshake fragment");
+			/* Fragmentation handler, send next fragment */
+			return EAP_TLS_RECORD_SEND;
+		}
+
+		/*
+		 *	We sent all of our message and the handshake isn't
+		 *	finished, so the peer should have answered with data.
+		 *	An empty Request would only bring another ACK.
+		 */
+		REDEBUG("Unexpected ACK received:  The handshake is not finished, and we have nothing more to send");
+		return EAP_TLS_INVALID;
 
 	case SSL3_RT_APPLICATION_DATA:
 		RDEBUG2("Peer ACKed our application data fragment");
