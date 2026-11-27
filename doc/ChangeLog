@@ -41,6 +41,8 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	  one outer fragment.
 	* Don't let a peer run TTLS, PEAP, FAST or TEAP inside another
 	  EAP tunnel.
+	* Fix EAP-pwd packets being 9 octets larger than "fragment_size"
+	  allows.  It now has the same meaning as for TLS.
 
 	Bug fixes
 
