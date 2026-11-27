@@ -43,6 +43,9 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	  EAP tunnel.
 	* Fix EAP-pwd packets being 9 octets larger than "fragment_size"
 	  allows.  It now has the same meaning as for TLS.
+	* Reject a peer which sends an EAP-TLS, PEAP, TTLS, FAST or TEAP
+	  ACK when there is nothing to acknowledge, instead of answering
+	  with empty Requests until the round limit.
 
 	Bug fixes
 
