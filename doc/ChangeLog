@@ -27,6 +27,8 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	  all of its attributes, naming the first one which was not sent.
 	* Fix PEAP with an inner EAP method failing when an inner packet
 	  takes more than one round, e.g. EAP-TLS with a CBC cipher.
+	* Fix a memory leak with OpenSSL 3 in EAP-pwd, and anywhere else
+	  which re-uses an HMAC context (MPPE keys, rlm_wimax).
 
 	Bug fixes
 

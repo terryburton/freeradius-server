@@ -60,11 +60,19 @@ static inline int HMAC3_Init_ex(HMAC3_CTX *ctx, const unsigned char *key, unsign
 	char const *name;
 	char *unconst;
 
-	ctx->mac = EVP_MAC_fetch(NULL, "HMAC", NULL);
-	if (!ctx->mac) return 0;
+	/*
+	 *	HMAC_Init_ex() may be called again on the same context,
+	 *	to start a new HMAC.  Re-use what the first call created.
+	 */
+	if (!ctx->mac) {
+		ctx->mac = EVP_MAC_fetch(NULL, "HMAC", NULL);
+		if (!ctx->mac) return 0;
+	}
 
-	ctx->ctx = EVP_MAC_CTX_new(ctx->mac);
-	if (!ctx->ctx) return 0;
+	if (!ctx->ctx) {
+		ctx->ctx = EVP_MAC_CTX_new(ctx->mac);
+		if (!ctx->ctx) return 0;
+	}
 
 	name = EVP_MD_get0_name(md);
 	memcpy(&unconst, &name, sizeof(name)); /* const issues */
