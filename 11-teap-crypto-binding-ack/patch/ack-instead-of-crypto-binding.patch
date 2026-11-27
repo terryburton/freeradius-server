@@ -1,0 +1,38 @@
+--- a/src/eap_peer/eap_teap.c
++++ b/src/eap_peer/eap_teap.c
+@@ -1245,6 +1245,7 @@
+ 	int failed = 0;
+ 	enum teap_error_codes error = 0;
+ 	int iresult_added = 0;
++	int cb_reply = 0;	/* reproducer: this response carries our Crypto-Binding */
+ 
+ 	if (eap_teap_parse_decrypted(decrypted, &tlv, &resp) < 0) {
+ 		/* Parsing failed - no response available */
+@@ -1371,6 +1372,7 @@
+ 			error = TEAP_ERROR_TUNNEL_COMPROMISE_ERROR;
+ 		} else {
+ 			resp = wpabuf_concat(resp, tmp);
++			cb_reply = 1;
+ 			if (tlv.result == TEAP_STATUS_SUCCESS && !failed)
+ 				data->result_success_done = 1;
+ 			if (tlv.iresult == TEAP_STATUS_SUCCESS && !failed) {
+@@ -1478,6 +1480,19 @@
+ 	if (!resp)
+ 		return 0;
+ 
++	/*
++	 * Reproducer: send a bare ACK in place of the response that carries
++	 * our Crypto-Binding TLV, to test that the server does not succeed
++	 * without it (RFC 7170).
++	 */
++	if (cb_reply) {
++		printf("REPRODUCER: an ACK in place of the Crypto-Binding response\n");
++		wpabuf_free(resp);
++		*out_data = eap_peer_tls_build_ack(identifier, EAP_TYPE_TEAP,
++						   data->teap_version);
++		return 0;
++	}
++
+ 	wpa_hexdump_buf(MSG_DEBUG, "EAP-TEAP: Encrypting Phase 2 data", resp);
+ 	if (eap_peer_tls_encrypt(sm, &data->ssl, EAP_TYPE_TEAP,
+ 				 data->teap_version, identifier,

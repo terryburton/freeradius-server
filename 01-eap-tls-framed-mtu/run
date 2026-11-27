@@ -1,0 +1,19 @@
+#!/bin/bash
+#
+#  EAP-TLS through a NAS whose Framed-MTU is 600.
+#
+#  RFC 3579 2.4: the server "MUST NOT send any subsequent packet in this
+#  EAP conversation containing EAP-Message attributes whose values, when
+#  concatenated, exceed the length specified by the Framed-MTU value".
+#  For an 802.1X link, RFC 3580 3.10 leaves Framed-MTU less 4 for the EAP
+#  packet (the EAPoL header).  So no EAP-Request may exceed 596 octets.
+#
+. "$(dirname "$0")/../common.sh"
+MTU=${MTU:-600}
+build_eapol_test
+run_eapol_test eapol_test.conf -N12:d:$MTU || true
+largest=$(largest_request)
+[ -n "$largest" ] || fail "no EAP-Request from the server (is it running, and does it do EAP-TLS?)"
+got_access_accept || fail "authentication failed, so the sizes say nothing"
+[ "$largest" -le $((MTU - 4)) ] || fail "the largest EAP-Request is $largest octets; Framed-MTU $MTU allows $((MTU - 4)) (RFC 3579 2.4, RFC 3580 3.10)"
+pass "every EAP-Request fits Framed-MTU $MTU (largest $largest, at most $((MTU - 4)))"

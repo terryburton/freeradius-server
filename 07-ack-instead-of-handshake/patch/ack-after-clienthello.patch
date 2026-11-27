@@ -1,0 +1,33 @@
+--- a/wpa_supplicant/eapol_test.c
++++ b/wpa_supplicant/eapol_test.c
+@@ -182,6 +182,30 @@
+ 	char buf[RADIUS_MAX_ATTR_LEN + 1];
+ 	const struct eap_hdr *hdr;
+ 	const u8 *pos;
++	/*
++	 * Reproducer: from Response 2 with data in a TLS-based
++	 * method (EAP-TLS, TTLS, PEAP, FAST, TEAP), the peer sends only
++	 * ACKs: the method's Type and Flags 0 (keeping the version bits),
++	 * and no data.
++	 */
++	static int data_responses;
++	static u8 ack[6];
++
++	if (len > 6 && eap[0] == EAP_CODE_RESPONSE &&
++	    (eap[4] == 13 || eap[4] == 21 || eap[4] == 25 || eap[4] == 43 ||
++	     eap[4] == 55) &&
++	    ++data_responses >= 2) {
++		printf("REPRODUCER: an ACK in place of Response %d with data\n",
++		       data_responses);
++		ack[0] = EAP_CODE_RESPONSE;
++		ack[1] = eap[1];
++		ack[2] = 0;
++		ack[3] = 6;
++		ack[4] = eap[4];
++		ack[5] = eap[5] & 0x07;
++		eap = ack;
++		len = sizeof(ack);
++	}
+ 
+ 	wpa_printf(MSG_DEBUG, "Encapsulating EAP message into a RADIUS "
+ 		   "packet");

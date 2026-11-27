@@ -1,0 +1,19 @@
+#!/bin/bash
+#
+#  EAP-TLS: one of the peer's Responses carries the Identifier of the
+#  previous Request instead of the outstanding one
+#  (patch/previous-identifier.patch).  The rest of the conversation is
+#  correct.
+#
+#  RFC 3748 4.1: "An authenticator receiving a Response whose Identifier
+#  value does not match that of the currently outstanding Request MUST
+#  silently discard the Response."  So the server must not act on it:
+#  the conversation cannot go on to an Accept.  (A reject is stricter
+#  than the RFC, but also passes.)
+#
+. "$(dirname "$0")/../common.sh"
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+grep -q '^REPRODUCER:' "$LOG" || fail "the peer never sent the wrong Identifier (did the server start EAP-TLS?)"
+got_access_accept && fail "the server acted on a Response with the wrong Identifier and went on to accept (RFC 3748 4.1)"
+pass "the Response with the wrong Identifier was not acted on ($(got_access_reject && echo Access-Reject || echo no answer))"

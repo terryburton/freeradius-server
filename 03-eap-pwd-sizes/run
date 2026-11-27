@@ -1,0 +1,31 @@
+#!/bin/bash
+#
+#  EAP-pwd: how large the server's packets are.
+#
+#  raddb/mods-available/eap says pwd's fragment_size "has the same
+#  meaning as for TLS": EAP packets of fragment_size less 4 (the EAPoL
+#  header).  And with a NAS Framed-MTU below that, RFC 3579 2.4 and
+#  RFC 3580 3.10 limit them to Framed-MTU less 4.
+#
+#  EAP-pwd messages are small, so this needs a small fragment_size on
+#  the server.  Set PWD_FRAGMENT_SIZE to it (e.g. "pwd { fragment_size =
+#  150 }"; FreeRADIUS v3.2.x's own tests use 100).
+#
+. "$(dirname "$0")/../common.sh"
+FS=${PWD_FRAGMENT_SIZE:?set PWD_FRAGMENT_SIZE to the pwd fragment_size of the server (e.g. 150)}
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+got_access_accept || fail "EAP-pwd did not authenticate"
+largest=$(largest_request)
+[ "$largest" -le $((FS - 4)) ] || fail "fragment_size $FS: the largest EAP-Request is $largest octets, more than fragment_size less 4 ($((FS - 4)))"
+msg="fragment_size $FS: largest EAP-Request $largest (at most $((FS - 4)))"
+#  A Framed-MTU only counts above 100.
+if [ "$FS" -gt 104 ]; then
+	MTU=$((FS - 3))
+	run_eapol_test eapol_test.conf -N12:d:$MTU || true
+	got_access_accept || fail "EAP-pwd did not authenticate with Framed-MTU $MTU"
+	largest=$(largest_request)
+	[ "$largest" -le $((MTU - 4)) ] || fail "Framed-MTU $MTU, just below fragment_size $FS: the largest EAP-Request is $largest octets, more than $((MTU - 4))"
+	msg="$msg; Framed-MTU $MTU: largest $largest (at most $((MTU - 4)))"
+fi
+pass "$msg"

@@ -1,0 +1,25 @@
+#!/bin/bash
+#
+#  More rounds than the server allows: the peer sends its certificate in
+#  fragments of 20 octets, which takes about 80 rounds.  That is over the
+#  default max_rounds (50), and under eapol_test's own limit (100).
+#
+#  The server stops the conversation at its limit.  That is a fatal
+#  error, so RFC 3579 2.6.2: "a RADIUS server determining that a fatal
+#  error has occurred MUST send an Access-Reject containing an
+#  EAP-Message attribute encapsulating EAP-Failure".  And it should answer
+#  when asked, not only when the NAS retransmits.
+#
+#  FreeRADIUS adds the EAP-Failure in "Post-Auth-Type REJECT { eap }",
+#  which the stock raddb has and v3.2.x's src/tests server does not.
+#
+. "$(dirname "$0")/../common.sh"
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+n=$(challenges)
+got_access_accept && { echo "SKIP  $NAME: authenticated in $n rounds: the server allows more than that"; exit 2; }
+grep -q 'more than 100 authentication rounds - abort' "$LOG" && { echo "SKIP  $NAME: eapol_test gives up at 100 rounds, and the server allows at least that: set its max_rounds lower (the default is 50)"; exit 2; }
+got_access_reject || fail "no Access-Reject after $n rounds"
+grep -q 'Resending RADIUS message' "$LOG" && fail "the Access-Reject came only when the NAS retransmitted (after $n rounds)"
+got_eap_failure || fail "the Access-Reject after $n rounds carries no EAP-Failure (RFC 3579 2.6.2)"
+pass "after $n rounds: an Access-Reject with an EAP-Failure, the first time"

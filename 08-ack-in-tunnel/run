@@ -1,0 +1,23 @@
+#!/bin/bash
+#
+#  PEAP: the peer completes the TLS handshake, and then only ACKs, in
+#  place of its data in the tunnel (patch/ack-after-handshake.patch).
+#
+#  RFC 5216 2.1.5 (which PEAP and TTLS use for their framing) defines a
+#  server Request with no data only as the Start, or as the ACK of a
+#  fragment from the peer.  Once the server has sent all of its tunnel
+#  data, a peer's ACK acknowledges nothing.  The server should reject the
+#  peer, not answer with empty Requests until its round limit, and must
+#  never accept it (it never authenticated inside the tunnel).
+#
+. "$(dirname "$0")/../common.sh"
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+grep -q '^REPRODUCER:' "$LOG" || fail "the peer never sent its ACK (did the server start PEAP?)"
+got_access_accept && fail "the server accepted a peer that never authenticated inside the tunnel"
+answer=$(answer_to_ack)
+case "$answer" in
+*"code=1 "*"len=6") fail "the server answered the ACK, which acknowledges nothing, with an empty Request ($answer): the peer can only ACK it again" ;;
+"") got_access_reject && pass "rejected (Access-Reject, no EAP packet)" ; fail "no answer to the ACK" ;;
+esac
+pass "the server answered the ACK with $answer, not an empty Request"

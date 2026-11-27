@@ -1,0 +1,22 @@
+#!/bin/bash
+#
+#  PEAP with EAP-TLS inside, through a NAS whose Framed-MTU is 600.
+#
+#  RFC 3579 2.4 and RFC 3580 3.10: no EAP-Request larger than Framed-MTU
+#  less 4.  The inner EAP-TLS then takes several rounds for each of its
+#  messages; PEAPv0 rebuilds each inner Response with the inner EAP
+#  Identifier, so that must stay right across those rounds.  So:
+#  authenticate, with every EAP-Request at most 596 octets.
+#
+#  First without a Framed-MTU, to show the server does PEAP-EAP-TLS at all.
+#
+. "$(dirname "$0")/../common.sh"
+MTU=${MTU:-600}
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+got_access_accept || { echo "SKIP  $NAME: PEAP-EAP-TLS fails even without a Framed-MTU: is it configured? ($LOG)"; exit 2; }
+run_eapol_test eapol_test.conf -N12:d:$MTU || true
+largest=$(largest_request)
+got_access_accept || fail "PEAP-EAP-TLS works without a Framed-MTU, but not with Framed-MTU $MTU (largest EAP-Request $largest)"
+[ "$largest" -le $((MTU - 4)) ] || fail "the largest EAP-Request is $largest octets; Framed-MTU $MTU allows $((MTU - 4))"
+pass "authenticated through Framed-MTU $MTU, largest EAP-Request $largest (at most $((MTU - 4)))"

@@ -1,0 +1,25 @@
+#!/bin/bash
+#
+#  TTLS with EAP-TLS inside, once with AES-GCM and once with AES-CBC and
+#  SHA-384 for the outer TLS session (TLS 1.2).
+#
+#  The server makes the inner EAP-TLS fragments smaller than the outer
+#  ones, so that each inner fragment, once wrapped in an outer TLS record
+#  and a TTLS AVP, still fits in one outer fragment.  If the allowance is
+#  too small for the cipher, every inner fragment takes two outer rounds.
+#  So: the same number of rounds with either cipher.
+#
+#  The server must allow both ciphers.  For PEAP instead of TTLS, set
+#  EAP=PEAP.
+#
+. "$(dirname "$0")/../common.sh"
+build_eapol_test
+rounds() {
+	sed "s/@CIPHERS@/$1/" "$HERE/eapol_test.conf" > "$HERE/eapol_test.$1.conf"
+	run_eapol_test "eapol_test.$1.conf" || { echo "SKIP  $NAME: did not authenticate with $1 (does the server allow it, and TTLS-EAP-TLS?) ($LOG)"; exit 2; }
+	challenges
+}
+gcm=$(rounds ECDHE-RSA-AES128-GCM-SHA256)
+cbc=$(rounds ECDHE-RSA-AES256-SHA384)
+[ "$cbc" -le "$gcm" ] || fail "$gcm rounds with AES-GCM, but $cbc with AES-CBC-SHA384: inner fragments don't fit in one outer fragment"
+pass "$gcm rounds with AES-GCM, $cbc with AES-CBC-SHA384"

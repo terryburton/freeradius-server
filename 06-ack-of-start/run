@@ -1,0 +1,22 @@
+#!/bin/bash
+#
+#  The peer answers the EAP-TLS Start with an ACK, and then only ACKs
+#  (patch/ack-from-the-start.patch).
+#
+#  RFC 5216 2.1.5 defines two EAP-TLS Requests with no data: the Start,
+#  and the server's ACK of a fragment from the peer.  An ACK of the Start
+#  acknowledges nothing, and no empty Request can answer it: the peer can
+#  only ACK again.  The server should reject the peer, not answer with
+#  empty Requests until its round limit.
+#
+. "$(dirname "$0")/../common.sh"
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+grep -q '^REPRODUCER:' "$LOG" || fail "the peer never sent its ACK (did the server start EAP-TLS?)"
+got_access_accept && fail "the server accepted a peer that never sent a ClientHello"
+answer=$(answer_to_ack)
+case "$answer" in
+*"code=1 "*"len=6") fail "the server answered the ACK, which acknowledges nothing, with an empty Request ($answer): the peer can only ACK it again" ;;
+"") got_access_reject && pass "rejected (Access-Reject, no EAP packet)" ; fail "no answer to the ACK" ;;
+esac
+pass "the server answered the ACK with $answer, not an empty Request"

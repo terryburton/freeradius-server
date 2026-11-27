@@ -1,0 +1,19 @@
+#!/bin/bash
+#
+#  TEAP: the peer authenticates inside the tunnel, but sends an ACK in
+#  place of the response carrying its Crypto-Binding TLV
+#  (patch/ack-instead-of-crypto-binding.patch).
+#
+#  RFC 7170: the Crypto-Binding TLV binds the inner authentication to the
+#  tunnel, and the server must check the peer's before it succeeds.  So
+#  the server must not accept a peer that never sent it.
+#
+#  The server must do TEAP with password authentication inside (as
+#  FreeRADIUS v3.2.x's eap-teap-password test does).
+#
+. "$(dirname "$0")/../common.sh"
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+grep -q '^REPRODUCER:' "$LOG" || { echo "SKIP  $NAME: TEAP never reached the Crypto-Binding (is TEAP configured?) ($LOG)"; exit 2; }
+got_access_accept && fail "the server accepted a peer that sent no Crypto-Binding TLV (RFC 7170)"
+pass "not accepted without the peer's Crypto-Binding ($(got_access_reject && echo Access-Reject || echo no Accept))"

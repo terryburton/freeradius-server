@@ -1,0 +1,30 @@
+#!/bin/bash
+#
+#  EAP-TLS with a client certificate of over 20K, so the peer's TLS
+#  message (its Certificate ... Finished) is longer than one TLS record.
+#
+#  RFC 5216 2.1.5: the TLS Message Length "provides the total length of
+#  the TLS message or set of messages that is being fragmented".  A
+#  message may span several TLS records; the peer fragments it, and the
+#  server reassembles it.  So: authenticate.
+#
+#  The certificate is made here, signed by the server's CA: set CA_KEY
+#  (default $CERTS/ca.key) and CA_PASSWORD (default "whatever").
+#
+. "$(dirname "$0")/../common.sh"
+CA_KEY=${CA_KEY:-$CERTS/ca.key}
+CA_PASSWORD=${CA_PASSWORD:-whatever}
+[ -f "$CA_KEY" ] || { echo "SKIP  $NAME: no CA key at $CA_KEY (set CA_KEY)"; exit 2; }
+#  The same certificate as FreeRADIUS's eap-tls-large-cert test: an
+#  extension of 20000 octets.
+printf '[ext]\nbasicConstraints = CA:FALSE\nextendedKeyUsage = clientAuth\n1.3.6.1.4.1.11344.1 = ASN1:UTF8String:%s\n' \
+	"$(head -c 20000 /dev/zero | tr '\0' x)" > "$HERE/.large.ext"
+openssl req -new -key "$CERTS/client.key" -passin "pass:$KEY_PASSWORD" -subj "/CN=${IDENTITY:-user@example.org}" 2>/dev/null |
+	openssl x509 -req -CA "$CERTS/ca.pem" -CAkey "$CA_KEY" -passin "pass:$CA_PASSWORD" -set_serial 1000 -days 2 \
+		-extfile "$HERE/.large.ext" -extensions ext -out "$HERE/.large.crt" 2>/dev/null ||
+	{ echo "SKIP  $NAME: could not make the certificate"; exit 2; }
+export CLIENT_CERT=$HERE/.large.crt
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+got_access_accept || fail "a correctly fragmented TLS message of $(( $(wc -c < "$HERE/.large.crt") / 1000 ))K+ was not accepted ($(got_access_reject && echo Access-Reject || echo no answer))"
+pass "authenticated with a $(( $(wc -c < "$HERE/.large.crt") / 1000 ))K certificate in $(challenges) rounds"

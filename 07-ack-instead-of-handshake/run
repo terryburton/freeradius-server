@@ -1,0 +1,23 @@
+#!/bin/bash
+#
+#  EAP-TLS: the peer sends its ClientHello, then only ACKs, so it ACKs
+#  the server's complete first flight instead of sending its own
+#  (patch/ack-after-clienthello.patch).
+#
+#  RFC 5216 2.1.5 defines two EAP-TLS Requests with no data: the Start,
+#  and the server's ACK of a fragment from the peer.  Once the server has
+#  sent all of its flight, an ACK acknowledges nothing, and an empty
+#  Request in answer to it is neither: the peer can only ACK again.  The
+#  server should reject the peer.
+#
+. "$(dirname "$0")/../common.sh"
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+grep -q '^REPRODUCER:' "$LOG" || fail "the peer never sent its ACK (did the server start EAP-TLS?)"
+got_access_accept && fail "the server accepted a peer that never finished the handshake"
+answer=$(answer_to_ack)
+case "$answer" in
+*"code=1 "*"len=6") fail "the server answered the ACK, which acknowledges nothing, with an empty Request ($answer): the peer can only ACK it again" ;;
+"") got_access_reject && pass "rejected (Access-Reject, no EAP packet)" ; fail "no answer to the ACK" ;;
+esac
+pass "the server answered the ACK with $answer, not an empty Request"
