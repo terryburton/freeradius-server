@@ -298,7 +298,9 @@ $(BUILD_PATH)/tests/eap/%.ok: LOG =  $(patsubst %.ok,%,$@).log
 #
 #  The size of the largest EAP packet the server must send, if it's checked.
 #
-$(BUILD_PATH)/tests/eap/eap-pwd-small-mtu.ok: EAP_LEN = 101
+#  fragment_size (100) is smaller than the NAS's Framed-MTU (105), so it
+#  is the limit: EAP packets of fragment_size less 4.
+$(BUILD_PATH)/tests/eap/eap-pwd-small-mtu.ok: EAP_LEN = 96
 EAP_LARGEST_REQUEST = sed -n 's/^decapsulated EAP packet (code=1 id=[0-9]* len=\([0-9]*\)).*/\1/p'
 
 $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(BUILD_PATH)/tests/eap radiusd.pid radiusd.kill
