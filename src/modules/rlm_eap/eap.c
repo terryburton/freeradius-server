@@ -284,6 +284,23 @@ static eap_type_t eap_process_nak(rlm_eap_t *inst, REQUEST *request,
 		}
 
 		/*
+		 *	A tunnelling method cannot run inside another
+		 *	tunnel.  eap_method_select() refuses only a
+		 *	third level, so without this a peer could put
+		 *	TTLS inside PEAP or TTLS.  A parent with a
+		 *	home_server is a proxy to a virtual server, not
+		 *	a tunnel.
+		 */
+		if (request->parent && !request->parent->home_server &&
+		    ((nak->data[i] == PW_EAP_TTLS) || (nak->data[i] == PW_EAP_PEAP) ||
+		     (nak->data[i] == PW_EAP_FAST) || (nak->data[i] == PW_EAP_TEAP))) {
+			RDEBUG2("Peer NAK'd asking for %s (%d), which cannot be nested inside "
+				"another tunnelling EAP type, skipping...",
+				eap_type2name(nak->data[i]), nak->data[i]);
+			continue;
+		}
+
+		/*
 		 *	Prevent a firestorm if the client is confused.
 		 */
 		if (type == nak->data[i]) {
