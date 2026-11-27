@@ -247,6 +247,7 @@ ifneq "$(OPENSSL_LIBS)" ""
 EAP_FILES += eap-psk.conf
 ifeq "$(OPENSSL3_OK)" "yes"
 EAP_FILES += eap-pwd.conf
+EAP_FILES += eap-pwd-small-mtu.conf
 endif
 endif
 
@@ -353,6 +354,12 @@ ACCEPT_FRAMED_MTU_SEEN = awk '/^RADIUS message: code=/ { accept = /code=2 /; if 
 #
 TLS13_L_BIT_WRONG = awk '/Phase 2 (EAP )?Request: type=13/ { inner = 1; next } /^SSL: Received packet\(len=[0-9]*\) - Flags 0x/ { if (inner) { inner = 0; next } if (/Flags 0x[89a-f]/ && !/Flags 0x[4-7c-f]/ && !more) bad = 1; if (/len=([7-9]|[1-9][0-9]+)\) - Flags 0x0/) good = 1; more = /Flags 0x[4-7c-f]/ } END { exit !(bad || !good) }'
 
+#
+#  The size of the largest EAP packet the server must send, if it's checked.
+#
+$(BUILD_PATH)/tests/eap/eap-pwd-small-mtu.ok: EAP_LEN = 101
+EAP_LARGEST_REQUEST = sed -n 's/^decapsulated EAP packet (code=1 id=[0-9]* len=\([0-9]*\)).*/\1/p'
+
 $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(BUILD_PATH)/tests/eap radiusd.pid radiusd.kill
 	${Q}printf 'EAPOL_TEST %s ' $(notdir $(patsubst %.conf,%,$<))
 	${Q}if ! $(CMD) > $(LOG) 2>&1; then \
@@ -381,6 +388,13 @@ $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(
 		exit 1; \
 	elif [ "`$(call ACCEPT_FRAMED_MTU_SEEN,$(LOG))`" != "$(ACCEPT_FRAMED_MTU)" ]; then \
 		echo " - " FAILED - Access-Accept missing, or with the wrong Framed-MTU; \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ -n "$(EAP_LEN)" ] && [ "`$(EAP_LARGEST_REQUEST) $(LOG) | sort -n | tail -1`" != "$(EAP_LEN)" ]; then \
+		echo " - " FAILED - the largest EAP packet was not $(EAP_LEN) octets; \
 		echo ">>> cmd -" $(CMD); \
 		echo ">>> log -" $(LOG); \
 		$(MAKE) radiusd.kill; \
