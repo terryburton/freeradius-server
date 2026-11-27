@@ -275,6 +275,11 @@ EAP_FRAMED_MTU_FILES += peap-framed-mtu.conf
 #
 EAP_SESSION_STATE_FILES = eap-tls-session-state.conf
 
+#
+#  The client's TLS message is longer than one TLS record.
+#
+EAP_FILES       += eap-tls-large-cert.conf
+
 EAP_TLS_VERSIONS = 1.1 1.2
 EAP_TLS_DISABLE_STRING = tls_disable_tlsv1_0=1 tls_disable_tlsv1_1=1 tls_disable_tlsv1_2=1
 
@@ -385,6 +390,21 @@ $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(
 	@echo
 	${Q}$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),PASS,$(LOG))
 	${Q}touch $@
+
+#
+#  A client certificate with an extension of 20000 octets, signed by the
+#  test CA.
+#
+$(BUILD_PATH)/tests/eap/client-large.crt: $(RADDB_PATH)certs/client.key $(RADDB_PATH)certs/ca.pem | $(BUILD_PATH)/tests/eap
+	${Q}printf '[ext]\nbasicConstraints = CA:FALSE\nextendedKeyUsage = clientAuth\n1.3.6.1.4.1.11344.1 = ASN1:UTF8String:%s\n' \
+		`head -c 20000 /dev/zero | tr '\\0' x` > $@.ext
+	${Q}openssl req -new -key $(RADDB_PATH)certs/client.key -passin pass:whatever \
+		-subj /CN=user@example.org | \
+	openssl x509 -req -CA $(RADDB_PATH)certs/ca.pem -CAkey $(RADDB_PATH)certs/ca.key \
+		-passin pass:whatever -set_serial 1000 -days 2 \
+		-extfile $@.ext -extensions ext -out $@ 2>/dev/null
+
+$(BUILD_PATH)/tests/eap/eap-tls-large-cert.ok: $(BUILD_PATH)/tests/eap/client-large.crt
 
 #
 #  Don't run the full TLS version tests for CI post-install.
