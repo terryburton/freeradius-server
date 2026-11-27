@@ -871,6 +871,15 @@ static unlang_action_t mod_handshake_resume(unlang_result_t *p_result, module_ct
 	 *	an EAP-TLS-Success packet here.
 	 */
 	case EAP_TLS_ESTABLISHED:
+		/*
+		 *	The peer ACKs the end of the handshake once.  An ACK
+		 *	once the tunnel is up would restart phase 2, and the
+		 *	peer would only ACK again.
+		 */
+		if (peap->status != PEAP_STATUS_INVALID) {
+			REDEBUG("Unexpected ACK received:  The tunnel is already established");
+			return eap_tls_fail(request, eap_session);
+		}
 		peap->status = PEAP_STATUS_TUNNEL_ESTABLISHED;
 		break;
 
