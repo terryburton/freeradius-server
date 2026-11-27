@@ -397,6 +397,18 @@
 #	fragment_size = 1024
 
 	#
+	#  buffer_size:: Size of the buffers which hold TLS data.
+	#
+	#  The largest TLS message the peer can send must fit, e.g. its
+	#  certificate chain.  A message may be larger than one TLS record
+	#  (16K).  A larger message is rejected, with a log message saying
+	#  what to set this to.
+	#
+	#  The minimum is 2048, and the maximum is 65536.
+	#
+#	buffer_size = 65536
+
+	#
 	#  ca_path:: Directory where additional CAs are located.
 	#
 	#  After placing files in this directory, the OpenSSL command
