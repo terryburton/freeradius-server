@@ -613,7 +613,7 @@ static int mod_session_init (void *instance, eap_handler_t *handler)
 	 *	The fragmentation code deals with the included length
 	 *	so we don't need to subtract that here.
 	 */
-	if (vp && (vp->vp_integer > 100) && (vp->vp_integer < session->mtu)) {
+	if (vp && (vp->vp_integer > 100) && ((vp->vp_integer - 9) < session->mtu)) {
 		session->mtu = vp->vp_integer - 9;
 	}
 

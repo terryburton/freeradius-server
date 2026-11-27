@@ -247,6 +247,7 @@ ifneq "$(OPENSSL_LIBS)" ""
 EAP_FILES += eap-psk.conf
 ifeq "$(OPENSSL3_OK)" "yes"
 EAP_FILES += eap-pwd.conf
+EAP_FILES += eap-pwd-small-mtu.conf
 endif
 endif
 
@@ -294,6 +295,12 @@ $(BUILD_PATH)/tests/eap/%.ok: MAC = $(shell printf '%s' $(basename $(notdir $@))
 $(BUILD_PATH)/tests/eap/%.ok: CMD =  $(EAPOL_TEST) -c $< -p $(PORT) -s $(SECRET) -M $(MAC) $(if $(NO_MPPE),-n)
 $(BUILD_PATH)/tests/eap/%.ok: LOG =  $(patsubst %.ok,%,$@).log
 
+#
+#  The size of the largest EAP packet the server must send, if it's checked.
+#
+$(BUILD_PATH)/tests/eap/eap-pwd-small-mtu.ok: EAP_LEN = 101
+EAP_LARGEST_REQUEST = sed -n 's/^decapsulated EAP packet (code=1 id=[0-9]* len=\([0-9]*\)).*/\1/p'
+
 $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(BUILD_PATH)/tests/eap radiusd.pid radiusd.kill
 	${Q}printf 'EAPOL_TEST %s ' $(notdir $(patsubst %.conf,%,$<))
 	${Q}if ! $(CMD) > $(LOG) 2>&1; then \
@@ -303,6 +310,13 @@ $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(
 		echo "===================="; \
 		tail -10 $(LOG); \
 		echo "===================="; \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ -n "$(EAP_LEN)" ] && [ "`$(EAP_LARGEST_REQUEST) $(LOG) | sort -n | tail -1`" != "$(EAP_LEN)" ]; then \
+		echo " - " FAILED - the largest EAP packet was not $(EAP_LEN) octets; \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
 		$(MAKE) radiusd.kill; \
 		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
 		exit 1; \
