@@ -258,6 +258,7 @@ EAP_TLS_FILES   += eap-ttls-mschapv2.conf
 EAP_TLS_FILES   += eap-ttls-pap.conf
 EAP_TLS_FILES   += peap-client-mschapv2.conf
 EAP_TLS_FILES   += peap-eap-tls.conf
+EAP_FILES       += peap-eap-tls-cbc.conf
 EAP_TLS_FILES   += peap-gtc.conf
 EAP_TLS_FILES   += peap-mschapv2.conf
 

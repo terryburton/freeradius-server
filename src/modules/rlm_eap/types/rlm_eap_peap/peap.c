@@ -182,7 +182,7 @@ static int eapmessage_verify(REQUEST *request,
  *	Convert a pseudo-EAP packet to a list of VALUE_PAIR's.
  */
 static VALUE_PAIR *eap2vp(UNUSED REQUEST *request, RADIUS_PACKET *packet,
-			  EAP_DS *eap_ds,
+			  EAP_DS *eap_ds, peap_tunnel_t const *t,
 			  uint8_t const *data, size_t data_len, int peap_version)
 {
 	uint8_t *p;
@@ -206,8 +206,14 @@ static VALUE_PAIR *eap2vp(UNUSED REQUEST *request, RADIUS_PACKET *packet,
 		vp->vp_length = EAP_HEADER_LEN + data_len;
 		MEM(vp->vp_octets = p = talloc_array(vp, uint8_t, vp->vp_length));
 
+		/*
+		 *	The inner EAP header isn't sent, so the
+		 *	response is to the last inner request.  Its
+		 *	Identifier may differ from the outer one, when
+		 *	that request took more than one round.
+		 */
 		p[0] = PW_EAP_RESPONSE;
-		p[1] = eap_ds->response->id;
+		p[1] = t->inner_eap_id_set ? t->inner_eap_id : eap_ds->response->id;
 		p[2] = (data_len + EAP_HEADER_LEN) >> 8;
 		p[3] = (data_len + EAP_HEADER_LEN) & 0xff;
 
@@ -238,6 +244,17 @@ static int vp2eap(REQUEST *request, tls_session_t *tls_session, VALUE_PAIR *vp)
 	size_t header = EAP_HEADER_LEN;
 
 	if (tls_session->peap_flag > 0) header = 0;
+
+	/*
+	 *	Remember the Identifier of the inner request, as the
+	 *	header which carries it isn't sent.
+	 */
+	if (header && (vp->vp_length >= EAP_HEADER_LEN)) {
+		peap_tunnel_t *t = tls_session->opaque;
+
+		t->inner_eap_id = vp->vp_octets[1];
+		t->inner_eap_id_set = true;
+	}
 
 	/*
 	 *	Skip the id, code, and length.  Just write the EAP
@@ -816,7 +833,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session, 
 
 	case PEAP_STATUS_PHASE2:
 		fake->packet->vps = eap2vp(request, fake->packet,
-					   eap_ds, data, data_len, tls_session->peap_flag);
+					   eap_ds, t, data, data_len, tls_session->peap_flag);
 		if (!fake->packet->vps) {
 			talloc_free(fake);
 			RDEBUG2("Unable to convert tunneled EAP packet to internal server data structures");
