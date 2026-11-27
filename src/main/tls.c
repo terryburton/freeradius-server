@@ -846,12 +846,14 @@ after_chain:
 	 *	  - the outer EAP header, Type, Flags and TLS Message
 	 *	    Length (10),
 	 *	  - the TLS record header (5), and the IV, MAC and padding
-	 *	    of the cipher: up to 80 for CBC with SHA-384,
-	 *	  - the AVP header which TTLS adds (8).
+	 *	    of the cipher: up to 16 + 48 + 16 = 80 for CBC with
+	 *	    SHA-384,
+	 *	  - the AVP header which TTLS adds, and its padding to a
+	 *	    multiple of 4 (8 + 3).
 	 *
 	 *	Otherwise each inner packet takes two outer rounds.
 	 */
-#define EAP_TLS_MAGIC_OVERHEAD (103)
+#define EAP_TLS_MAGIC_OVERHEAD (106)
 
 	/*
 	 *	The largest EAP packet we can send is the Framed-MTU
