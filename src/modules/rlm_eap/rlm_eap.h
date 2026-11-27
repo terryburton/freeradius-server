@@ -66,6 +66,7 @@ typedef struct rlm_eap {
 	bool		allow_empty_identities;
 
 	uint32_t	max_sessions;
+	uint32_t	max_rounds;
 
 	char const	*dedup_key;
 

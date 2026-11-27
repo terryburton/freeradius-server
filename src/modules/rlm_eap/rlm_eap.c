@@ -41,6 +41,7 @@ static const CONF_PARSER module_config[] = {
 	{ "cisco_accounting_username_bug", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_t, mod_accounting_username_bug), "no" },
 	{ "allow_empty_identities", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_t, allow_empty_identities), NULL },
 	{ "max_sessions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_eap_t, max_sessions), "2048" },
+	{ "max_rounds", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_eap_t, max_rounds), "50" },
 	{ "dedup_key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_eap_t, dedup_key), "" },
 	CONF_PARSER_TERMINATOR
 };
@@ -161,6 +162,9 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 
 	inst->xlat_name = cf_section_name2(cs);
 	if (!inst->xlat_name) inst->xlat_name = "EAP";
+
+	FR_INTEGER_BOUND_CHECK("max_rounds", inst->max_rounds, >=, 32);
+	FR_INTEGER_BOUND_CHECK("max_rounds", inst->max_rounds, <=, 100);
 
 	if (!dict_valbyname(PW_AUTH_TYPE, 0, inst->xlat_name)) {
 		cf_log_err_cs(cs, "Failed to find 'Auth-Type %s' section.  Cannot authenticate users.",

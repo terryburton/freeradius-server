@@ -95,6 +95,19 @@ eap {
 	#
 	max_sessions = ${max_requests}
 
+	#  The maximum number of round trips in an EAP session.  Each
+	#  EAP fragment takes a round trip, so large certificate
+	#  chains, a small "fragment_size" or Framed-MTU, and
+	#  EAP-TLS inside of PEAP or TTLS can need more than the
+	#  default.  For EAP inside of PEAP or TTLS, the inner EAP
+	#  session also has a limit, from the "eap" module which the
+	#  inner tunnel uses.  Note that many NASes also limit the
+	#  number of round trips.
+	#
+	#  Allowed values: 32 to 100.
+	#
+#	max_rounds = 50
+
 
 	############################################################
 	#

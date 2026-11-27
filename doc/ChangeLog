@@ -34,6 +34,8 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	* Fix rlm_cache returning cached session-state attributes only once
 	  with the rbtree driver.  This broke TLS session resumption through
 	  a "tls-cache" virtual server.
+	* Add "max_rounds" to the EAP module, for sessions which need more
+	  than 50 round trips, e.g. with large certificate chains.
 
 	Bug fixes
 

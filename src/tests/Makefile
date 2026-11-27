@@ -183,6 +183,7 @@ config/eap-test: $(RADDB_PATH)mods-available/eap config/eap-test-inner-tunnel co
 	     -e 's/= inner-tunnel/= eap-test-inner-tunnel/;s/use_tunneled_reply = no/use_tunneled_reply = yes/' \
 	     -e 's/enable = no/enable = yes/' \
 	     -e 's/^#\(\tdedup_key = \)/\1/' \
+	     -e 's/^#\tmax_rounds = 50/\tmax_rounds = 100/' \
 	     -e 's/^\(.*\)persist_dir =/  persist_dir =/' \
 	     -e 's/#.*softfail =.*/softfail = yes/' \
 	     -e 's/tls_min_version = "1.2"/tls_min_version = "1.0"/' \
@@ -250,6 +251,11 @@ EAP_FILES += eap-pwd.conf
 EAP_FILES += eap-pwd-small-mtu.conf
 endif
 endif
+
+#
+#  More than 50 round trips, which needs max_rounds.
+#
+EAP_FILES       += eap-tls-many-rounds.conf
 
 EAP_TLS_FILES    = eap-tls.conf
 EAP_TLS_FILES   += eap-ttls-eap-gtc.conf
