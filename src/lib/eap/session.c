@@ -445,8 +445,13 @@ eap_session_t *eap_session_continue(void const *instance, eap_packet_raw_t **eap
 		}
 
 		(void) talloc_get_type_abort(eap_session, eap_session_t);
+		/*
+		 *	The session's max_rounds (at most 100) is the usual
+		 *	limit.  This one is only a backstop, so it mustn't
+		 *	be lower.
+		 */
 		eap_session->rounds++;
-		if (eap_session->rounds >= 50) {
+		if (eap_session->rounds >= 100) {
 			RERROR("Failing EAP session due to too many round trips");
 			goto error;
 		}

@@ -543,10 +543,31 @@ RESUME(access_challenge)
 	 *	Cache the state context, unless this is a subrequest.
 	 *	Subrequest state context will be handled by the caller.
 	 *
-	 *	If this fails, don't respond to the request.
+	 *	If this fails, e.g. because the session has had too many
+	 *	rounds, reject the request.  With no reply, the NAS would
+	 *	retransmit, and get a reject only then.
 	 */
 	if (!request->parent && fr_state_store(inst->auth.state_tree, request) < 0) {
-		return CALL_SEND_TYPE(FR_RADIUS_CODE_DO_NOT_RESPOND);
+		fr_pair_t	*vp;
+
+		/*
+		 *	The reply holds the EAP-Request of the challenge.
+		 *	An Access-Reject carries an EAP-Failure instead
+		 *	(RFC 3579 Section 2.6.2), whose Identifier is that
+		 *	of the peer's Response (RFC 3748 Section 4.2).
+		 */
+		vp = fr_pair_find_by_da(&request->request_pairs, NULL, attr_eap_message);
+		if (vp && (vp->vp_length >= 4) &&
+		    fr_pair_find_by_da(&request->reply_pairs, NULL, attr_eap_message)) {
+			uint8_t failure[4] = { 4 /* Failure */, vp->vp_octets[1], 0, 4 };
+
+			fr_pair_delete_by_da(&request->reply_pairs, attr_eap_message);
+			MEM(pair_append_reply(&vp, attr_eap_message) >= 0);
+			fr_pair_value_memdup(vp, failure, sizeof(failure), false);
+		}
+		fr_pair_delete_by_da(&request->reply_pairs, attr_state);
+
+		return CALL_SEND_TYPE(FR_RADIUS_CODE_ACCESS_REJECT);
 	}
 
 	fr_assert(request->reply->code == FR_RADIUS_CODE_ACCESS_CHALLENGE);
