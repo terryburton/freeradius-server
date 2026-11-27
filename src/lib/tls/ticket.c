@@ -263,6 +263,21 @@ int tls_ticket_app_data_get(request_t *request, SSL_SESSION *sess,
 		REXDENT();
 	}
 
+	/*
+	 *	OpenSSL may decrypt the same ticket more than once in one
+	 *	handshake, e.g. for the second ClientHello after a
+	 *	HelloRetryRequest.  Replace what an earlier call restored,
+	 *	instead of adding a second copy, which would then go into
+	 *	the next ticket, and double it.
+	 */
+	{
+		fr_pair_t *vp;
+
+		for (vp = fr_pair_list_head(&tmp); vp; vp = fr_pair_list_next(&tmp, vp)) {
+			fr_pair_delete_by_da(&request->session_state_pairs, vp->da);
+		}
+	}
+
 	fr_pair_list_append(&request->session_state_pairs, &tmp);
 
 	return 0;
