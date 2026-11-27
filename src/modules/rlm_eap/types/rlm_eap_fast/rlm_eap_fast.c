@@ -136,6 +136,7 @@ static int mod_instantiate(CONF_SECTION *cs, void **instance)
 	fr_md5_init(&ctx);
 	fr_md5_update(&ctx, inst->authority_identity, talloc_array_length(inst->authority_identity) - 1);
 	fr_md5_final(inst->a_id, &ctx);
+	fr_md5_destroy(&ctx);
 
 	return 0;
 }
