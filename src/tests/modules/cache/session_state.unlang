@@ -1,0 +1,37 @@
+#
+#  A cached session-state attribute must still be in the entry after the
+#  entry has been merged into a request.  It used to be moved out of the
+#  entry, so only the first merge got it.
+#
+update session-state {
+	&Tmp-String-1 := "cached"
+}
+
+#
+#  Create the entry.  It is merged into the request at once.
+#
+cache
+
+update session-state {
+	&Tmp-String-1 !* ANY
+}
+
+#
+#  Merge it again.
+#
+cache
+
+if (&session-state:Tmp-String-1 == "cached") {
+	update reply {
+		&Filter-Id := "found"
+	}
+}
+else {
+	update reply {
+		&Filter-Id := "missing"
+	}
+}
+
+update control {
+	&Cleartext-Password := "hello"
+}
