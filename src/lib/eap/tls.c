@@ -521,9 +521,14 @@ static eap_tls_status_t eap_tls_session_status(request_t *request, eap_session_t
 		REDEBUG("Unexpected ACK received:  No ongoing SSL tls_session");
 		return EAP_TLS_INVALID;
 	}
+	/*
+	 *	Nothing has been sent but the EAP-TLS Start, which the
+	 *	peer answers with its ClientHello, not with an ACK.  An
+	 *	empty Request would only bring another ACK.
+	 */
 	if (!tls_session->info.initialized) {
-		RDEBUG2("No SSL info available.  Waiting for more SSL data");
-		return EAP_TLS_RECORD_SEND;
+		REDEBUG("Unexpected ACK received:  We sent only the Start, and the peer sent no ClientHello");
+		return EAP_TLS_INVALID;
 	}
 
 	if ((tls_session->info.content_type == SSL3_RT_HANDSHAKE) &&
@@ -548,15 +553,34 @@ static eap_tls_status_t eap_tls_session_status(request_t *request, eap_session_t
 			 */
 			tls_session->info.content_type = SSL3_RT_APPLICATION_DATA;
 			return EAP_TLS_ESTABLISHED;
-		} /* else more data to send */
+		}
 
-		RDEBUG2("Peer ACKed our handshake fragment");
-		/* Fragmentation handler, send next fragment */
-		return EAP_TLS_RECORD_SEND;
+		if (fr_dbuff_remaining(tls_session->dirty_out) > 0) {
+			RDEBUG2("Peer ACKed our handshake fragment");
+			/* Fragmentation handler, send next fragment */
+			return EAP_TLS_RECORD_SEND;
+		}
+
+		/*
+		 *	We sent all of our message and the handshake isn't
+		 *	finished, so the peer should have answered with data.
+		 *	An empty Request would only bring another ACK.
+		 */
+		REDEBUG("Unexpected ACK received:  The handshake is not finished, and we have nothing more to send");
+		return EAP_TLS_INVALID;
 
 	case SSL3_RT_APPLICATION_DATA:
-		RDEBUG2("Peer ACKed our application data fragment");
-		return EAP_TLS_RECORD_SEND;
+		if (fr_dbuff_remaining(tls_session->dirty_out) > 0) {
+			RDEBUG2("Peer ACKed our application data fragment");
+			return EAP_TLS_RECORD_SEND;
+		}
+
+		/*
+		 *	We sent all of our message, so the peer should have
+		 *	answered with data.
+		 */
+		REDEBUG("Unexpected ACK received:  We have no more application data to send");
+		return EAP_TLS_INVALID;
 
 		/*
 		 *	For the rest of the conditions, switch over
@@ -568,8 +592,17 @@ static eap_tls_status_t eap_tls_session_status(request_t *request, eap_session_t
 		 *	sending the session ticket.
 		 */
 		if (tls_session->info.origin == TLS_INFO_ORIGIN_RECORD_SENT) {
-			if (fr_dbuff_remaining(tls_session->dirty_out) == 0) return EAP_TLS_ESTABLISHED;
-			return EAP_TLS_RECORD_SEND;
+			if (fr_dbuff_remaining(tls_session->dirty_out) > 0) return EAP_TLS_RECORD_SEND;
+
+			/*
+			 *	With TLS 1.3, an ACK in place of the peer's
+			 *	Finished also arrives here.  The session is
+			 *	established only if the handshake is finished.
+			 */
+			if (fr_tls_session_is_init_finished(tls_session)) return EAP_TLS_ESTABLISHED;
+
+			REDEBUG("Unexpected ACK received:  The handshake is not finished, and we have nothing more to send");
+			return EAP_TLS_INVALID;
 		}
 		REDEBUG("Invalid ACK received: %d", tls_session->info.content_type);
 		return EAP_TLS_INVALID;
