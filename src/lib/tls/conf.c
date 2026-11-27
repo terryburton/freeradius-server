@@ -212,7 +212,7 @@ conf_parser_t fr_tls_server_config[] = {
 
 	{ FR_CONF_OFFSET_FLAGS("dh_file", CONF_FLAG_FILE_READABLE, fr_tls_conf_t, dh_file) },
 	{ FR_CONF_OFFSET("fragment_size", fr_tls_conf_t, fragment_size), .func = tls_fragment_size_parse, .dflt = "1024" },
-	{ FR_CONF_OFFSET("buffer_size", fr_tls_conf_t, buffer_size), .dflt = "16384" },
+	{ FR_CONF_OFFSET("buffer_size", fr_tls_conf_t, buffer_size), .dflt = "65536" },
 	{ FR_CONF_OFFSET("padding", fr_tls_conf_t, padding_block_size), .func = tls_padding_parse },
 
 	{ FR_CONF_OFFSET("disable_single_dh_use", fr_tls_conf_t, disable_single_dh_use) },
