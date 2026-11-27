@@ -55,6 +55,8 @@ typedef struct peap_tunnel_t {
 	bool		proxy_tunneled_request_as_eap;
 	char const	*virtual_server;
 	peap_resumption	session_resumption_state;
+	bool		inner_eap_id_set;	//!< inner_eap_id is valid.
+	uint8_t		inner_eap_id;		//!< EAP Identifier of the last inner request.
 } peap_tunnel_t;
 
 
