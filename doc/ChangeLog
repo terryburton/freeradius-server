@@ -23,6 +23,8 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	* Fix EAP-TLS rejecting messages from the peer which are longer
 	  than one TLS record, such as a large client certificate chain.
 	* Fix EAP-pwd ignoring a Framed-MTU just above its fragment_size.
+	* Log a warning when a reply or proxied packet is too large for
+	  all of its attributes, naming the first one which was not sent.
 
 	Bug fixes
 
