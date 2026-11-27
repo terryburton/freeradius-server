@@ -1477,6 +1477,12 @@ void eap_tls_conf_check(CONF_SECTION *cs, fr_tls_conf_t *tls_conf, bool delayed_
 				     tls_conf->buffer_size, (unsigned int) FR_TLS_EAP_BUFFER_SIZE_MAX);
 		tls_conf->buffer_size = FR_TLS_EAP_BUFFER_SIZE_MAX;
 	}
+
+	if (tls_conf->fragment_size > FR_TLS_EAP_FRAGMENT_SIZE_MAX) {
+		cf_log_warn_by_child(cs, "tls", "Lowering EAP fragment_size from %u to %u",
+				     tls_conf->fragment_size, (unsigned int) FR_TLS_EAP_FRAGMENT_SIZE_MAX);
+		tls_conf->fragment_size = FR_TLS_EAP_FRAGMENT_SIZE_MAX;
+	}
 }
 
 /** Check that the TLS configuration does not need stateless session tickets

@@ -93,6 +93,12 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #define FR_TLS_EAP_BUFFER_SIZE_MIN	(2048)
 #define FR_TLS_EAP_BUFFER_SIZE_MAX	(65536)
 
+/*
+ *	An EAP packet must fit into one RADIUS packet (4096 octets),
+ *	with room for the other attributes.
+ */
+#define FR_TLS_EAP_FRAGMENT_SIZE_MAX	(4000)
+
 typedef enum : uint8_t {
 	EAP_TLS_INVALID = 0,	  			//!< Invalid, don't reply.
 	EAP_TLS_ESTABLISHED,       			//!< Session established, send success (or start phase2).
