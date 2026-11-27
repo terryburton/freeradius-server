@@ -706,7 +706,7 @@ static eap_tls_status_t eap_tls_verify(request_t *request, eap_session_t *eap_se
 		size_t total_len;
 
 		if (eap_tls_data->data[0] || eap_tls_data->data[1]) {
-			REDEBUG("TLS record length is > 65536");
+			REDEBUG("TLS record length is 65536 bytes or more");
 			return EAP_TLS_INVALID;
 		}
 
@@ -722,8 +722,11 @@ static eap_tls_status_t eap_tls_verify(request_t *request, eap_session_t *eap_se
 		 */
 		if (total_len > eap_tls_session->tls_session->dirty_size) {
 			REDEBUG("Reassembled TLS record will be %zu bytes, "
-				"greater than our maximum record size (%zu bytes)",
-				total_len, eap_tls_session->tls_session->dirty_size);
+				"greater than our maximum record size (%zu bytes).  "
+				"Increase \"buffer_size\" (currently %u) in the TLS configuration "
+				"to %zu or more",
+				total_len, eap_tls_session->tls_session->dirty_size,
+				eap_tls_session->tls_session->conf->buffer_size, total_len);
 			return EAP_TLS_INVALID;
 		}
 
