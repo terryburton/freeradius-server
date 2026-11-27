@@ -1266,8 +1266,11 @@ eap_tls_session_t *eap_tls_session_init(request_t *request, eap_session_t *eap_s
 	 *	asking the administrator to know the internal details
 	 *	of EAP-TLS in order to calculate fragment sizes is
 	 *	just too much.
+	 *
+	 *	The method runs in a subrequest, so the Framed-MTU
+	 *	from the NAS is in the parent.
 	 */
-	vp = fr_pair_find_by_da(&request->request_pairs, NULL, attr_framed_mtu);
+	vp = fr_pair_find_by_da(&request->parent->request_pairs, NULL, attr_framed_mtu);
 
 	/*
 	 *	TLS 1.3 introduces the concept of early data (also known as zero
@@ -1313,9 +1316,17 @@ eap_tls_session_t *eap_tls_session_init(request_t *request, eap_session_t *eap_s
 	 *	the maximum amount of data we read from a TLS buffer.
 	 */
 	tls_session->mtu = conf->fragment_size - 10;
-	if (vp && (vp->vp_uint32 > 100) && (vp->vp_uint32 < tls_session->mtu)) {
+
+	/*
+	 *	The largest EAP packet we can send is the Framed-MTU
+	 *	less the EAPoL header (4), as per RFC 3579 Section 2.4
+	 *	and RFC 3580 Section 3.10.  The EAP header (4) and the
+	 *	EAP-TLS Type and Flags (2) leave the room for the TLS
+	 *	Message Length and the TLS data.
+	 */
+	if (vp && (vp->vp_uint32 > 100) && ((vp->vp_uint32 - 10) < tls_session->mtu)) {
 		RDEBUG2("Setting fragment_len from %pP", vp);
-		tls_session->mtu = vp->vp_uint32;
+		tls_session->mtu = vp->vp_uint32 - 10;
 	}
 
 	/*
