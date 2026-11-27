@@ -890,11 +890,16 @@ static bool tls_dirty_out_full(REQUEST *request, tls_session_t *ssn)
 
 	if (pending <= 0) return false;
 
+	/*
+	 *	The output buffer is a little larger than buffer_size,
+	 *	and is always at least as large.  So a buffer_size of
+	 *	all of the data is enough.
+	 */
 	RERROR("(TLS) %s - %d more bytes of TLS data were not written into the output "
 	       "buffer.  Increase \"buffer_size\" (currently %u) in the TLS configuration "
-               "to %u or more.  This issue is usually caused by a large certificate "
+               "to %zu or more.  This issue is usually caused by a large certificate "
                "chain." , ssn->conf->name, pending, ssn->conf->buffer_size,
-	       ssn->conf->buffer_size + (unsigned int) pending);
+	       ssn->dirty_out.used + (size_t) pending);
 	return true;
 }
 
