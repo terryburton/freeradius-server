@@ -2097,6 +2097,18 @@ static SSL_SESSION *cbtls_get_session(SSL *ssl, const unsigned char *data, int l
 
 	RDEBUG2("Peer requested cached session: %s", buffer);
 
+	/*
+	 *	Remember it, as a resumed TLS 1.3 session gets a new ID.
+	 */
+	{
+		tls_session_t *ssn = SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_SSN);
+
+		if (ssn) {
+			talloc_free(ssn->resumed_session_id);
+			ssn->resumed_session_id = talloc_strdup(ssn, buffer);
+		}
+	}
+
 	*copy = 0;
 
 	conf = (fr_tls_server_conf_t *)SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_CONF);
@@ -5632,6 +5644,42 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 
 			/* "touch" the cached session/vp file */
 			char filename[3 * MAX_SESSION_SIZE + 1];
+
+			/*
+			 *	A resumed TLS 1.3 session has a new ID, and
+			 *	the ticket sent to the peer is for that one.
+			 *	Copy the attributes of the session which was
+			 *	resumed, so that it can be resumed in turn.
+			 */
+			if (ssn->resumed_session_id && (strcmp(ssn->resumed_session_id, buffer) != 0)) {
+				char	old_filename[3 * MAX_SESSION_SIZE + 1];
+				FILE	*in, *out;
+
+				snprintf(old_filename, sizeof(old_filename), "%s%c%s.vps",
+					 conf->session_cache_path, FR_DIR_SEP, ssn->resumed_session_id);
+				snprintf(filename, sizeof(filename), "%s%c%s.vps",
+					 conf->session_cache_path, FR_DIR_SEP, buffer);
+
+				in = fopen(old_filename, "r");
+				if (!in) {
+					RWDEBUG("(TLS) Could not read session VPs from persistent cache: %s",
+						fr_syserror(errno));
+				} else {
+					out = fopen(filename, "wx");
+					if (out) {
+						char	copy[1024];
+						size_t	len;
+
+						RDEBUG2("Saving session %s in the disk cache, from session %s",
+							buffer, ssn->resumed_session_id);
+						while ((len = fread(copy, 1, sizeof(copy), in)) > 0) {
+							if (fwrite(copy, 1, len, out) != len) break;
+						}
+						fclose(out);
+					}
+					fclose(in);
+				}
+			}
 
 			snprintf(filename, sizeof(filename), "%s%c%s.asn1",
 				 conf->session_cache_path, FR_DIR_SEP, buffer);
