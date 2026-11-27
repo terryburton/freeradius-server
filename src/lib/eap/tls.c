@@ -1335,9 +1335,31 @@ eap_tls_session_t *eap_tls_session_init(request_t *request, eap_session_t *eap_s
 	 *	needs to be smaller than the outer one, so that the inner TLS fragments fit within the outer
 	 *	TLS fragments.
 	 */
-	if (eap_session_in_tunnel(eap_session->request) && (tls_session->mtu > (EAP_TLS_NESTED_OVERHEAD + 100))) {
-		tls_session->mtu -= EAP_TLS_NESTED_OVERHEAD;
-		RDEBUG2("Nested inside another EAP method, lowering fragment_len to %zu", tls_session->mtu);
+	if (eap_session_in_tunnel(eap_session->request)) {
+		request_t *parent;
+
+		/*
+		 *	The outer session's MTU may be smaller than ours, e.g. from the NAS's Framed-MTU.  An
+		 *	inner packet which doesn't fit into one outer fragment takes more than one round, and
+		 *	PEAPv0 then puts the wrong EAP Identifier into the inner response.
+		 */
+		for (parent = eap_session->request->parent; parent; parent = parent->parent) {
+			eap_session_t		*outer = eap_session_get(parent);
+			eap_tls_session_t	*outer_tls;
+
+			if (!outer || !outer->tunnel) continue;
+
+			outer_tls = talloc_get_type(outer->opaque, eap_tls_session_t);
+			if (outer_tls && outer_tls->tls_session && (outer_tls->tls_session->mtu < tls_session->mtu)) {
+				tls_session->mtu = outer_tls->tls_session->mtu;
+			}
+			break;
+		}
+
+		if (tls_session->mtu > (EAP_TLS_NESTED_OVERHEAD + 100)) {
+			tls_session->mtu -= EAP_TLS_NESTED_OVERHEAD;
+			RDEBUG2("Nested inside another EAP method, lowering fragment_len to %zu", tls_session->mtu);
+		}
 	}
 
 	/*
