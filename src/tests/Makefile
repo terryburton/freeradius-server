@@ -270,6 +270,11 @@ EAP_TLS_DISABLE_STRING = tls_disable_tlsv1_0=1 tls_disable_tlsv1_1=1 tls_disable
 ifneq "$(TLS1_3)" ""
 EAP_TLS_VERSIONS       += 1.3
 EAP_TLS_DISABLE_STRING += tls_disable_tlsv1_3=1
+
+#
+#  Each resumption of a TLS 1.3 session must be resumable in turn.
+#
+EAP_FILES              += eap-tls-13-resume.conf
 endif
 
 .PHONY: $(BUILD_PATH)/tests/eap
@@ -291,8 +296,9 @@ clean.tests.eap:
 #
 $(BUILD_PATH)/tests/eap/%.ok: NO_MPPE = $(filter eap-md5,$(basename $(notdir $@)))
 $(BUILD_PATH)/tests/eap/%.ok: MAC = $(shell printf '%s' $(basename $(notdir $@)) | cksum | awk '{ printf "02:00:%02x:%02x:%02x:%02x", int($$1 / 16777216) % 256, int($$1 / 65536) % 256, int($$1 / 256) % 256, $$1 % 256 }')
-$(BUILD_PATH)/tests/eap/%.ok: CMD =  $(EAPOL_TEST) -c $< -p $(PORT) -s $(SECRET) -M $(MAC) $(if $(NO_MPPE),-n)
+$(BUILD_PATH)/tests/eap/%.ok: CMD =  $(EAPOL_TEST) -c $< -p $(PORT) -s $(SECRET) -M $(MAC) $(if $(NO_MPPE),-n) $(if $(RESUMES),-r $(RESUMES))
 $(BUILD_PATH)/tests/eap/%.ok: LOG =  $(patsubst %.ok,%,$@).log
+$(BUILD_PATH)/tests/eap/eap-tls-13-resume.ok: RESUMES = 3
 
 $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(BUILD_PATH)/tests/eap radiusd.pid radiusd.kill
 	${Q}printf 'EAPOL_TEST %s ' $(notdir $(patsubst %.conf,%,$<))
@@ -303,6 +309,13 @@ $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(
 		echo "===================="; \
 		tail -10 $(LOG); \
 		echo "===================="; \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ -n "$(RESUMES)" ] && ! awk '/Handshake finished - resumed=1/ { r++ } r && /Handshake finished - resumed=0/ { bad = 1 } END { exit (bad || !r) }' $(LOG); then \
+		echo " - " FAILED - a session after the first resumption was not resumed; \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
 		$(MAKE) radiusd.kill; \
 		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
 		exit 1; \

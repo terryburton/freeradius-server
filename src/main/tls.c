@@ -2097,6 +2097,18 @@ static SSL_SESSION *cbtls_get_session(SSL *ssl, const unsigned char *data, int l
 
 	RDEBUG2("Peer requested cached session: %s", buffer);
 
+	/*
+	 *	Remember it, as a resumed TLS 1.3 session gets a new ID.
+	 */
+	{
+		tls_session_t *ssn = SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_SSN);
+
+		if (ssn) {
+			talloc_free(ssn->resumed_session_id);
+			ssn->resumed_session_id = talloc_strdup(ssn, buffer);
+		}
+	}
+
 	*copy = 0;
 
 	conf = (fr_tls_server_conf_t *)SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_CONF);
@@ -2493,10 +2505,8 @@ static SSL_SESSION *cbtls_cache_load(SSL *ssl, const unsigned char *data, int le
 	size = len;
 	if (size > MAX_SESSION_SIZE) size = MAX_SESSION_SIZE;
 
-	if (fr_debug_lvl > 1) {
-		fr_bin2hex(buffer, data, size);
-		RDEBUG2("Peer requested cached session: %s", buffer);
-	}
+	fr_bin2hex(buffer, data, size);
+	RDEBUG2("Peer requested cached session: %s", buffer);
 
 	*copy = 0;
 
@@ -2607,6 +2617,19 @@ static SSL_SESSION *cbtls_cache_load(SSL *ssl, const unsigned char *data, int le
 
 	SSL_SESSION_set_ex_data(sess, fr_tls_ex_index_vps, vps);
 	RDEBUG("Successfully restored session %s", buffer);
+
+	/*
+	 *	Remember it, as a resumed TLS 1.3 session gets a new ID.
+	 */
+	{
+		tls_session_t *ssn = SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_SSN);
+
+		if (ssn) {
+			talloc_free(ssn->resumed_session_id);
+			ssn->resumed_session_id = talloc_strdup(ssn, buffer);
+			ssn->resumed_vps = vps;
+		}
+	}
 	rdebug_pair_list(L_DBG_LVL_2, request, vps, "reply:");
 
 	/*
@@ -5609,29 +5632,65 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 	 *	Else the session WAS allowed.  Copy the cached reply.
 	 */
 	} else {
+		char buffer[2 * MAX_SESSION_SIZE + 1];
+
 		RDEBUG("(TLS) cache - Refreshing entry for session resumption");
+
+#if OPENSSL_VERSION_NUMBER >= 0x10001000L
+#ifdef TLS1_3_VERSION
+		/*
+		 *	OpenSSL frees the underlying session out from
+		 *	under us in TLS 1.3.
+		 */
+		if (SSL_version(ssn->ssl) == TLS1_3_VERSION) ssn->ssl_session = SSL_get_session(ssn->ssl);
+#endif
+#endif
+
+		tls_session_id(ssn->ssl_session, buffer, MAX_SESSION_SIZE);
 
 		/*
 		 *	The "restore VPs from OpenSSL cache" code is
 		 *	now in eaptls_process()
 		 */
 		if (conf->session_cache_path) {
-			char buffer[2 * MAX_SESSION_SIZE + 1];
-
-#if OPENSSL_VERSION_NUMBER >= 0x10001000L
-#ifdef TLS1_3_VERSION
-			/*
-			 *	OpenSSL frees the underlying session out from
-			 *	under us in TLS 1.3.
-			 */
-			if (SSL_version(ssn->ssl) == TLS1_3_VERSION) ssn->ssl_session = SSL_get_session(ssn->ssl);
-#endif
-#endif
-
-			tls_session_id(ssn->ssl_session, buffer, MAX_SESSION_SIZE);
-
 			/* "touch" the cached session/vp file */
 			char filename[3 * MAX_SESSION_SIZE + 1];
+
+			/*
+			 *	A resumed TLS 1.3 session has a new ID, and
+			 *	the ticket sent to the peer is for that one.
+			 *	Copy the attributes of the session which was
+			 *	resumed, so that it can be resumed in turn.
+			 */
+			if (ssn->resumed_session_id && (strcmp(ssn->resumed_session_id, buffer) != 0)) {
+				char	old_filename[3 * MAX_SESSION_SIZE + 1];
+				FILE	*in, *out;
+
+				snprintf(old_filename, sizeof(old_filename), "%s%c%s.vps",
+					 conf->session_cache_path, FR_DIR_SEP, ssn->resumed_session_id);
+				snprintf(filename, sizeof(filename), "%s%c%s.vps",
+					 conf->session_cache_path, FR_DIR_SEP, buffer);
+
+				in = fopen(old_filename, "r");
+				if (!in) {
+					RWDEBUG("(TLS) Could not read session VPs from persistent cache: %s",
+						fr_syserror(errno));
+				} else {
+					out = fopen(filename, "wx");
+					if (out) {
+						char	copy[1024];
+						size_t	len;
+
+						RDEBUG2("Saving session %s in the disk cache, from session %s",
+							buffer, ssn->resumed_session_id);
+						while ((len = fread(copy, 1, sizeof(copy), in)) > 0) {
+							if (fwrite(copy, 1, len, out) != len) break;
+						}
+						fclose(out);
+					}
+					fclose(in);
+				}
+			}
 
 			snprintf(filename, sizeof(filename), "%s%c%s.asn1",
 				 conf->session_cache_path, FR_DIR_SEP, buffer);
@@ -5642,7 +5701,18 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 		}
 
 		if (conf->session_cache_server) {
-			cbtls_cache_refresh(ssn->ssl, ssn->ssl_session);
+			/*
+			 *	A resumed TLS 1.3 session has a new ID, which
+			 *	isn't in the cache.  Save it, with the
+			 *	attributes of the session which was resumed.
+			 */
+			if (ssn->resumed_session_id && (strcmp(ssn->resumed_session_id, buffer) != 0)) {
+				RDEBUG2("Saving session %s in the cache, from session %s",
+					buffer, ssn->resumed_session_id);
+				cbtls_cache_save_vps(ssn->ssl, ssn->ssl_session, ssn->resumed_vps);
+			} else {
+				cbtls_cache_refresh(ssn->ssl, ssn->ssl_session);
+			}
 		}
 
 		/*
