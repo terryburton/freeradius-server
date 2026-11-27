@@ -468,6 +468,22 @@ eap_session_t *eap_session_continue(void const *instance, eap_packet_raw_t **eap
 			RERROR("Your Supplicant or NAS is probably broken");
 			goto error;
 		}
+
+		/*
+		 *	RFC 3748 Section 4.1: "An authenticator receiving a
+		 *	Response whose Identifier value does not match that of
+		 *	the currently outstanding Request MUST silently discard
+		 *	the Response."  The session is found by State alone, so
+		 *	without this the Response would be processed, and the
+		 *	next Request built from its Identifier.
+		 */
+		if (eap_session->prev_round && eap_session->prev_round->request &&
+		    (eap_packet->id != eap_session->prev_round->request->id)) {
+			RERROR("Response has EAP Identifier %u, but the outstanding Request has %u",
+			       eap_packet->id, eap_session->prev_round->request->id);
+			RERROR("Your Supplicant or NAS is probably broken");
+			goto error;
+		}
 	}
 
 	/*
