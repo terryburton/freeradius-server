@@ -840,13 +840,18 @@ after_chain:
 
 	/*
 	 *	An inner packet is sent in a TLS record of the outer
-	 *	session.  The record adds its header (5), and the IV, MAC
-	 *	and padding of the cipher: up to 80 more for CBC with
-	 *	SHA-384.  TTLS adds an AVP header (8) as well.  If the inner
-	 *	packet and that overhead don't fit into one outer fragment,
-	 *	each inner packet takes two outer rounds.
+	 *	session, and that record in an outer EAP packet.  So the
+	 *	inner packet must leave room for:
+	 *
+	 *	  - the outer EAP header, Type, Flags and TLS Message
+	 *	    Length (10),
+	 *	  - the TLS record header (5), and the IV, MAC and padding
+	 *	    of the cipher: up to 80 for CBC with SHA-384,
+	 *	  - the AVP header which TTLS adds (8).
+	 *
+	 *	Otherwise each inner packet takes two outer rounds.
 	 */
-#define EAP_TLS_MAGIC_OVERHEAD (100)
+#define EAP_TLS_MAGIC_OVERHEAD (103)
 
 	/*
 	 *	The largest EAP packet we can send is the Framed-MTU
