@@ -288,6 +288,11 @@ EAP_TLS_DISABLE_STRING = tls_disable_tlsv1_0=1 tls_disable_tlsv1_1=1 tls_disable
 ifneq "$(TLS1_3)" ""
 EAP_TLS_VERSIONS       += 1.3
 EAP_TLS_DISABLE_STRING += tls_disable_tlsv1_3=1
+
+#
+#  Each resumption of a TLS 1.3 session must be resumable in turn.
+#
+EAP_FILES              += eap-tls-13-resume.conf
 endif
 
 .PHONY: $(BUILD_PATH)/tests/eap
@@ -309,7 +314,7 @@ clean.tests.eap:
 #
 $(BUILD_PATH)/tests/eap/%.ok: NO_MPPE = $(filter eap-md5,$(basename $(notdir $@)))
 $(BUILD_PATH)/tests/eap/%.ok: MAC = $(shell printf '%s' $(basename $(notdir $@)) | cksum | awk '{ printf "02:00:%02x:%02x:%02x:%02x", int($$1 / 16777216) % 256, int($$1 / 65536) % 256, int($$1 / 256) % 256, $$1 % 256 }')
-$(BUILD_PATH)/tests/eap/%.ok: CMD =  $(EAPOL_TEST) -c $< -p $(PORT) -s $(SECRET) -M $(MAC) $(if $(NO_MPPE),-n)
+$(BUILD_PATH)/tests/eap/%.ok: CMD =  $(EAPOL_TEST) -c $< -p $(PORT) -s $(SECRET) -M $(MAC) $(if $(NO_MPPE),-n) $(if $(RESUMES),-r $(RESUMES))
 $(BUILD_PATH)/tests/eap/%.ok: LOG =  $(patsubst %.ok,%,$@).log
 $(BUILD_PATH)/tests/eap/%.ok: TLS_METHOD = $(filter $(basename $(EAP_TLS_FILES)),$(basename $(notdir $@)))
 $(BUILD_PATH)/tests/eap/%.ok: FRAMED_MTU = $(if $(filter $(basename $(EAP_FRAMED_MTU_FILES)),$(basename $(notdir $@))),600)
@@ -360,6 +365,7 @@ TLS13_L_BIT_WRONG = awk '/Phase 2 (EAP )?Request: type=13/ { inner = 1; next } /
 #
 $(BUILD_PATH)/tests/eap/eap-pwd-small-mtu.ok: EAP_LEN = 101
 EAP_LARGEST_REQUEST = sed -n 's/^decapsulated EAP packet (code=1 id=[0-9]* len=\([0-9]*\)).*/\1/p'
+$(BUILD_PATH)/tests/eap/eap-tls-13-resume.ok: RESUMES = 3
 
 $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(BUILD_PATH)/tests/eap radiusd.pid radiusd.kill
 	${Q}printf 'EAPOL_TEST %s ' $(notdir $(patsubst %.conf,%,$<))
@@ -396,6 +402,13 @@ $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(
 		exit 1; \
 	elif [ -n "$(EAP_LEN)" ] && [ "`$(EAP_LARGEST_REQUEST) $(LOG) | sort -n | tail -1`" != "$(EAP_LEN)" ]; then \
 		echo " - " FAILED - the largest EAP packet was not $(EAP_LEN) octets; \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ -n "$(RESUMES)" ] && ! awk '/Handshake finished - resumed=1/ { r++ } r && /Handshake finished - resumed=0/ { bad = 1 } END { exit (bad || !r) }' $(LOG); then \
+		echo " - " FAILED - a session after the first resumption was not resumed; \
 		echo ">>> cmd -" $(CMD); \
 		echo ">>> log -" $(LOG); \
 		$(MAKE) radiusd.kill; \
