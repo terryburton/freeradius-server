@@ -7,12 +7,14 @@
 #  header).  And with a NAS Framed-MTU below that, RFC 3579 2.4 and
 #  RFC 3580 3.10 limit them to Framed-MTU less 4.
 #
-#  EAP-pwd messages are small, so this needs a small fragment_size on
-#  the server.  Set PWD_FRAGMENT_SIZE to it (e.g. "pwd { fragment_size =
-#  150 }"; FreeRADIUS v3.2.x's own tests use 100).
+#  EAP-pwd messages are small (about 100 octets), so this needs a small
+#  fragment_size on the server, and set PWD_FRAGMENT_SIZE to it.  105
+#  tests both: "pwd { fragment_size = 105 }" (FreeRADIUS v3.2.x's own
+#  tests use 100, which tests only the first, as a Framed-MTU only counts
+#  above 100).
 #
 . "$(dirname "$0")/../common.sh"
-FS=${PWD_FRAGMENT_SIZE:?set PWD_FRAGMENT_SIZE to the pwd fragment_size of the server (e.g. 150)}
+FS=${PWD_FRAGMENT_SIZE:?set PWD_FRAGMENT_SIZE to the pwd fragment_size of the server (e.g. 105)}
 build_eapol_test
 run_eapol_test eapol_test.conf || true
 got_access_accept || fail "EAP-pwd did not authenticate"

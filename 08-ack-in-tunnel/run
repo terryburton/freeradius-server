@@ -7,8 +7,9 @@
 #  server Request with no data only as the Start, or as the ACK of a
 #  fragment from the peer.  Once the server has sent all of its tunnel
 #  data, a peer's ACK acknowledges nothing.  The server should reject the
-#  peer, not answer with empty Requests until its round limit, and must
-#  never accept it (it never authenticated inside the tunnel).
+#  peer (FreeRADIUS's choice; RFC 5216 does not say), not answer with
+#  empty Requests, nor start the tunnel's exchange again, until its round
+#  limit; and it must never accept it (it never authenticated inside).
 #
 . "$(dirname "$0")/../common.sh"
 build_eapol_test
@@ -17,7 +18,8 @@ grep -q '^REPRODUCER:' "$LOG" || fail "the peer never sent its ACK (did the serv
 got_access_accept && fail "the server accepted a peer that never authenticated inside the tunnel"
 answer=$(answer_to_ack)
 case "$answer" in
-*"code=1 "*"len=6") fail "the server answered the ACK, which acknowledges nothing, with an empty Request ($answer): the peer can only ACK it again" ;;
-"") got_access_reject && pass "rejected (Access-Reject, no EAP packet)" ; fail "no answer to the ACK" ;;
+"code=4 "*) pass "the server answered the ACK with an EAP-Failure ($answer)" ;;
+"") got_access_reject && pass "the server answered the ACK with an Access-Reject" ; fail "no answer to the ACK" ;;
+*"code=1 "*"len=6"|*"code=1 "*"len=10") fail "the server answered the ACK, which acknowledges nothing, with an empty Request ($answer): the peer can only ACK it again" ;;
+*) fail "the server answered the ACK, which acknowledges nothing, with $answer instead of an EAP-Failure: it carries on (or starts again) as if the peer had sent something" ;;
 esac
-pass "the server answered the ACK with $answer, not an empty Request"

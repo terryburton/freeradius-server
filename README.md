@@ -29,7 +29,7 @@ Settings, from the environment:
 | `INNER_IDENTITY`, `PASSWORD` | `bob`, `bob` | the user inside a tunnel, and for EAP-pwd |
 | `CA_KEY`, `CA_PASSWORD` | `$CERTS/ca.key`, `whatever` | to sign the large certificate of 04 and 05 |
 | `MTU` | `600` | the NAS Framed-MTU in 01 and 02 |
-| `PWD_FRAGMENT_SIZE` | (required by 03) | the server's EAP-pwd `fragment_size` |
+| `PWD_FRAGMENT_SIZE` | (required by 03) | the server's EAP-pwd `fragment_size`: 105 tests both of 03's checks |
 
 The configurations (`eapol_test.conf`) are plain eapol_test network
 blocks, with `@NAME@` placeholders for the settings above.
@@ -56,32 +56,46 @@ tracked in issue #38.
 
 ## Results so far
 
-Against FreeRADIUS's own test servers (`src/tests` on v3.2.x, each
-`test.<name>` server on master):
+Against FreeRADIUS's own test servers: `src/tests` on v3.2.x, and the
+`test.<name>` server for each method on master (with that test's
+identities, from the environment).
 
-| Dir | v3.2.x upstream (+ #21 to build) | v3.2.x with all the fixes |
-|---|---|---|
-| 01 | FAIL: 606 octets | PASS |
-| 02 | FAIL: 610 octets | PASS |
-| 03 (fragment_size 100) | FAIL: 102 octets | PASS |
-| 04 | FAIL: rejected | PASS |
-| 05 | FAIL\*: no EAP-Failure | SKIP: the test server allows 100 rounds, which is eapol_test's own limit |
-| 06 | FAIL: empty Request | PASS |
-| 07 | PASS | PASS |
-| 08 | FAIL: empty Request | PASS |
-| 09 | PASS | PASS |
-| 10 | FAIL: 18 rounds against 15 | PASS |
-| 11 | PASS | PASS |
+| Dir | v3.2.x upstream (+ #21 to build) | v3.2.x, all fixes | master upstream (+ #36) | master, all fixes |
+|---|---|---|---|---|
+| 01 | FAIL: 606 octets | PASS | FAIL: 1020 octets (Framed-MTU ignored) | PASS |
+| 02 | FAIL: 610 octets | PASS | FAIL: 1020 octets | PASS |
+| 03 | FAIL: 102 octets (fragment_size 100) | PASS | FAIL: 102 > 101 (fragment_size 105) | PASS |
+| 04 | FAIL: rejected | PASS | FAIL: rejected | PASS |
+| 05 | FAIL\*: no EAP-Failure | SKIP: allows 100 rounds | PASS | PASS |
+| 06 | FAIL: empty Request | PASS | FAIL: empty Request | PASS |
+| 07 | PASS | PASS | FAIL: empty Request (10 octets: L, length 0) | PASS |
+| 08 | FAIL: empty Request | PASS | FAIL: PEAP starts phase 2 again | PASS |
+| 09 | PASS | PASS | FAIL: acted on, and accepted | PASS |
+| 10 | FAIL: 18 rounds against 15 | PASS | FAIL: 16 against 14 | PASS |
+| 11 | PASS | PASS | (no TEAP) | (no TEAP) |
 
 \* v3.2.x's `src/tests` server has no `Post-Auth-Type REJECT { eap }`,
 which the stock raddb has, and that is what adds the EAP-Failure.
+
+05 passes on upstream master: there, EAP's own limit of 50 rejects at
+once. It is a regression check for #31, whose first version sent no
+reply at `session.max_rounds`.
 
 ## Notes
 
 * eapol_test stops at 100 rounds itself, so 05 needs a server whose
   limit is lower. The default `max_rounds` is 50.
 * 10 needs the server to allow both ciphers (with TLS 1.2), and, on
-  master, TTLS's default `include_length = yes`.
+  master, TTLS's default `include_length = yes` (master's
+  `ttls-client-eap-tls` test sets `no`, which saves exactly the 4 octets
+  that hide the problem).
+* 02 and 10 also offer the client certificate on the outer tunnel, for
+  servers (such as master's tests) that ask for one; otherwise it is not
+  sent.
+* 06 to 08 expect the server to reject a peer whose ACK acknowledges
+  nothing. RFC 5216 doesn't say what the server must do; rejecting at
+  once is FreeRADIUS's choice, as v3.2.x already does for an ACK in the
+  middle of the handshake.
 * 11 needs TEAP with password authentication inside, as FreeRADIUS
   v3.2.x's `eap-teap-password` test has.
 * Nesting a tunnel inside a tunnel (fixed for v3.2.x in #40) has no
