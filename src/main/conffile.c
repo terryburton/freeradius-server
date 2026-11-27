@@ -2651,6 +2651,7 @@ void cf_md5_final(uint8_t *digest)
 	}
 
 	fr_md5_final(digest, &conf_context);
+	fr_md5_destroy(&conf_context);
 	cf_md5_initted = false;
 }
 
