@@ -31,6 +31,9 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	  which re-uses an HMAC context (MPPE keys, rlm_wimax).
 	* Fix every other TLS 1.3 session not being resumed with the disk
 	  session cache ("persist_dir").
+	* Fix rlm_cache returning cached session-state attributes only once
+	  with the rbtree driver.  This broke TLS session resumption through
+	  a "tls-cache" virtual server.
 
 	Bug fixes
 
