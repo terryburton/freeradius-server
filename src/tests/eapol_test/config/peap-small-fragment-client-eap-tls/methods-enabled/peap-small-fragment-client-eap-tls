@@ -1,0 +1,21 @@
+type = peap
+type = tls
+#
+#  The outer fragments are smaller than the inner ones, so an inner
+#  packet takes more than one round of the outer session.
+#
+peap {
+	tls {
+		$template tls-common
+		fragment_size = 400
+	}
+	default_eap_type = tls
+	virtual_server = "inner-tunnel"
+	require_client_certificate = "yes"
+}
+
+tls {
+	tls {
+		$template tls-common
+	}
+}

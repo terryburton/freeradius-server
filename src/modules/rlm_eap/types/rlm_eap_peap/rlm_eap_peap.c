@@ -65,6 +65,8 @@ typedef struct {
 	bool		home_access_accept;
 	int		default_method;
 	peap_resumption	session_resumption_state;
+	bool		inner_eap_id_set;	//!< inner_eap_id is valid.
+	uint8_t		inner_eap_id;		//!< EAP Identifier of the last inner request.
 } peap_tunnel_t;
 
 #define EAP_TLV_SUCCESS (1)
@@ -253,7 +255,7 @@ static int eap_peap_verify(request_t *request, peap_tunnel_t *peap_tunnel,
  *	Convert a pseudo-EAP packet to a list of fr_pair_t's.
  */
 static void eap_peap_inner_to_pairs(TALLOC_CTX *ctx, fr_pair_list_t *pairs,
-			  	    eap_round_t *eap_round,
+			  	    eap_round_t *eap_round, peap_tunnel_t const *t,
 				    uint8_t const *data, size_t data_len)
 {
 	uint8_t		*p;
@@ -270,8 +272,12 @@ static void eap_peap_inner_to_pairs(TALLOC_CTX *ctx, fr_pair_list_t *pairs,
 	 */
 	MEM(vp = fr_pair_afrom_da(ctx, attr_eap_message));
 	MEM(fr_pair_value_mem_alloc(vp, &p, EAP_HEADER_LEN + data_len, false) == 0);
+	/*
+	 *	The inner EAP header isn't sent, so the response is to the last inner request.  Its
+	 *	Identifier may differ from the outer one, when that request took more than one round.
+	 */
 	p[0] = FR_EAP_CODE_RESPONSE;
-	p[1] = eap_round->response->id;
+	p[1] = t->inner_eap_id_set ? t->inner_eap_id : eap_round->response->id;
 	p[2] = (data_len + EAP_HEADER_LEN) >> 8;
 	p[3] = (data_len + EAP_HEADER_LEN) & 0xff;
 	memcpy(p + EAP_HEADER_LEN, data, data_len);
@@ -295,6 +301,16 @@ static int eap_peap_inner_from_pairs(request_t *request, fr_tls_session_t *tls_s
 	 */
 	this = fr_pair_list_head(vps);
 	if (this->vp_length <= EAP_HEADER_LEN) return 1;
+
+	/*
+	 *	Remember the Identifier of the inner request, as the header which carries it isn't sent.
+	 */
+	{
+		peap_tunnel_t *t = talloc_get_type_abort(tls_session->opaque, peap_tunnel_t);
+
+		t->inner_eap_id = this->vp_octets[1];
+		t->inner_eap_id_set = true;
+	}
 
 	(void) fr_dbuff_in_memcpy_partial(&tls_session->clean_in, this->vp_octets + EAP_HEADER_LEN,
 					this->vp_length - EAP_HEADER_LEN);
@@ -689,7 +705,7 @@ static unlang_action_t eap_peap_process(unlang_result_t *p_result, module_ctx_t 
 
 	case PEAP_STATUS_PHASE2:
 		eap_peap_inner_to_pairs(child->request_ctx, &child->request_pairs,
-					eap_round, data, data_len);
+					eap_round, t, data, data_len);
 		if (fr_pair_list_empty(&child->request_pairs)) {
 			TALLOC_FREE(child);
 			RDEBUG2("Unable to convert tunneled EAP packet to internal server data structures");
