@@ -316,9 +316,12 @@ int eaptls_request(EAP_DS *eap_ds, tls_session_t *ssn, bool start)
 	if (start) reply.flags = SET_START(reply.flags);
 
 	/*
+	 *	Leave room for the TLS Message Length, which the first
+	 *	fragment of a message must have.
+	 *
 	 *	This is only true for TEAP, so only TEAP has to check the return value of this function.
 	 */
-	if (lbit + obit + olen >= ssn->mtu) {
+	if (4 + obit + olen >= ssn->mtu) {
 		ERROR("fragment_size is too small for outer TLVs");
 		return -1;
 	}
@@ -327,12 +330,16 @@ int eaptls_request(EAP_DS *eap_ds, tls_session_t *ssn, bool start)
 
 	/* Send data, NOT more than the FRAGMENT size */
 	if (ssn->dirty_out.used > tls_mtu) {
-		size = tls_mtu;
 		reply.flags = SET_MORE_FRAGMENTS(reply.flags);
-		/* Length MUST be included if it is the First Fragment */
-		if (ssn->fragment == 0) {
+		/*
+		 *	Length MUST be included if it is the First
+		 *	Fragment, and it takes room from the data.
+		 */
+		if ((ssn->fragment == 0) && !lbit) {
 			lbit = 4;
+			tls_mtu -= lbit;
 		}
+		size = tls_mtu;
 		ssn->fragment = 1;
 	} else {
 		size = ssn->dirty_out.used;
@@ -1322,6 +1329,16 @@ fr_tls_server_conf_t *eaptls_conf_parse(CONF_SECTION *cs, char const *attr)
 
 	if (!tls_cs)
 		return NULL;
+
+	/*
+	 *	Several EAP methods may use the same tls-config
+	 *	section, which is parsed once and then cached.  If
+	 *	another method has already parsed it, then the checks
+	 *	and the adjustment of the fragment size below have
+	 *	already been done, and must not be done again.
+	 */
+	tls_conf = cf_data_find(tls_cs, "tls-conf");
+	if (tls_conf) return tls_conf;
 
 	tls_conf = tls_server_conf_parse(tls_cs, true);
 

@@ -840,13 +840,30 @@ after_chain:
 #define EAP_TLS_MAGIC_OVERHEAD (63)
 
 	/*
+	 *	The largest EAP packet we can send is the Framed-MTU
+	 *	less the EAPoL header (4), as per RFC 3579 Section 2.4
+	 *	and RFC 3580 Section 3.10.  The EAP header (4) and the
+	 *	EAP-TLS Type and Flags (2) leave what eaptls_request()
+	 *	has for the TLS Message Length and the TLS data, as it
+	 *	makes room for the TLS Message Length itself.
+	 *
+	 *	eaptls_conf_parse() subtracts the same 10 octets from
+	 *	fragment_size, counted as the EAP header (4), Type and
+	 *	Flags (2), and TLS Message Length (4).  As the length
+	 *	is then subtracted again here, the effect is the same:
+	 *	a fragment_size and a Framed-MTU of the same value give
+	 *	EAP packets of that value less 4.
+	 */
+#define EAP_TLS_FRAMED_MTU_OVERHEAD (10)
+
+	/*
 	 *	If the packet contains an MTU, then use that.  We
 	 *	trust the admin!
 	 */
 	vp = fr_pair_find_by_num(request->packet->vps, PW_FRAMED_MTU, 0, TAG_ANY);
 	if (vp) {
-		if ((vp->vp_integer > 100) && (vp->vp_integer < state->mtu)) {
-			state->mtu = vp->vp_integer;
+		if ((vp->vp_integer > 100) && ((vp->vp_integer - EAP_TLS_FRAMED_MTU_OVERHEAD) < state->mtu)) {
+			state->mtu = vp->vp_integer - EAP_TLS_FRAMED_MTU_OVERHEAD;
 		}
 
 	} else if (request->parent) {
@@ -5430,6 +5447,25 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 	rad_assert(conf != NULL);
 
 	talloc_ctx = SSL_get_ex_data(ssn->ssl, FR_TLS_EX_INDEX_TALLOC);
+
+	/*
+	 *	tls_new_session() caches the fragment size as the first
+	 *	Framed-MTU in session-state, for the use of an EAP
+	 *	method inside of the TLS tunnel.  It is not a reply
+	 *	attribute: a Framed-MTU in an Access-Accept tells the
+	 *	NAS which MTU to configure for the user (RFC 2865
+	 *	Section 5.12).  So remove that one before post-auth
+	 *	copies session-state to the reply.  Any Framed-MTU
+	 *	which policy added to session-state after it, such as
+	 *	one copied from the inner tunnel's reply, stays.
+	 */
+	{
+		vp_cursor_t cursor;
+
+		fr_cursor_init(&cursor, &request->state);
+		vp = fr_cursor_next_by_num(&cursor, PW_FRAMED_MTU, 0, TAG_ANY);
+		if (vp && (vp->vp_integer == ssn->mtu)) talloc_free(fr_cursor_remove(&cursor));
+	}
 
 	/*
 	 *	If there's no session resumption, delete the entry
