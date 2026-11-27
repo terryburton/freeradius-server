@@ -1013,6 +1013,7 @@ redo:
  */
 int dual_tls_send(rad_listen_t *listener, REQUEST *request)
 {
+	int rcode;
 	listen_socket_t *sock = listener->data;
 
 	VERIFY_REQUEST(request);
@@ -1096,11 +1097,13 @@ int dual_tls_send(rad_listen_t *listener, REQUEST *request)
 	/*
 	 *	Pack the VPs
 	 */
-	if (rad_encode(request->reply, request->packet,
-		       request->client->secret) < 0) {
+	rcode = rad_encode(request->reply, request->packet, request->client->secret);
+	if (rcode < 0) {
 		RERROR("Failed encoding packet: %s", fr_strerror());
 		return 0;
 	}
+
+	if (rcode > 0) RWARN("%s", fr_strerror());
 
 	if (request->reply->data_len > (sock->limit.max_packet_size - 100)) {
 		RWARN("Packet is large, and possibly truncated - %zd vs max %u",
@@ -1732,11 +1735,13 @@ int proxy_tls_send_reply(rad_listen_t *listener, REQUEST *request)
 	/*
 	 *	Pack the VPs
 	 */
-	if (rad_encode(request->reply, request->packet,
-		       request->client->secret) < 0) {
+	rcode = rad_encode(request->reply, request->packet, request->client->secret);
+	if (rcode < 0) {
 		RERROR("Failed encoding packet: %s", fr_strerror());
 		return 0;
 	}
+
+	if (rcode > 0) RWARN("%s", fr_strerror());
 
 	if (request->reply->data_len > (sock->limit.max_packet_size - 100)) {
 		RWARN("Packet is large, and possibly truncated - %zd vs max %u",

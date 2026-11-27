@@ -3171,6 +3171,8 @@ static int proxy_socket_recv(rad_listen_t *listener)
 
 static int client_socket_encode(TLS_UNUSED rad_listen_t *listener, REQUEST *request)
 {
+	int rcode;
+
 #ifdef WITH_TLS
 	/*
 	 *	Don't encode fake packets.
@@ -3188,11 +3190,14 @@ static int client_socket_encode(TLS_UNUSED rad_listen_t *listener, REQUEST *requ
 
 	if (request->reply->data) return 0; /* already encoded */
 
-	if (rad_encode(request->reply, request->packet, request->client->secret) < 0) {
+	rcode = rad_encode(request->reply, request->packet, request->client->secret);
+	if (rcode < 0) {
 		RERROR("Failed encoding packet: %s", fr_strerror());
 
 		return -1;
 	}
+
+	if (rcode > 0) RWARN("%s", fr_strerror());
 
 	if (request->reply->data_len > (MAX_PACKET_LEN - 100)) {
 		RWDEBUG("Packet is large, and possibly truncated - %zd vs max %d",
@@ -3254,6 +3259,7 @@ static int client_socket_decode(UNUSED rad_listen_t *listener, REQUEST *request)
 
 static int proxy_socket_encode(RADIUSV11_UNUSED rad_listen_t *listener, REQUEST *request)
 {
+	int		rcode;
 #ifdef HOMESERVER_VIOLATES_RFC
 	bool		tls;
 #endif
@@ -3267,11 +3273,14 @@ static int proxy_socket_encode(RADIUSV11_UNUSED rad_listen_t *listener, REQUEST 
 	tls = request->packet->tls;
 	if (request->home_server->no_auto_ma) request->proxy->tls = true;
 #endif
-	if (rad_encode(request->proxy, NULL, request->home_server->secret) < 0) {
+	rcode = rad_encode(request->proxy, NULL, request->home_server->secret);
+	if (rcode < 0) {
 		RERROR("Failed encoding proxied packet: %s", fr_strerror());
 
 		return -1;
 	}
+
+	if (rcode > 0) RWARN("%s", fr_strerror());
 #ifdef HOMESERVER_VIOLATES_RFC
 	request->proxy->tls = tls;
 #endif
