@@ -951,10 +951,11 @@ void fr_tls_session_msg_cb(int write_p, int msg_version, int content_type,
 	/*
 	 *	As per https://tools.ietf.org/html/rfc7568
 	 *
-	 *	We explicitly disable SSLv2/v3, hence the asserts.
+	 *	We explicitly disable SSLv2/v3.  The version comes from
+	 *	what the peer sent, so it isn't an assertion.
 	 */
 #ifdef SSL2_VERSION
-	if (!fr_cond_assert(msg_version != SSL2_VERSION)) {
+	if (msg_version == SSL2_VERSION) {
 		REDEBUG("(TLS) Invalid version (SSLv2) in handshake");
 		fr_tls_session_error_alert(request, tls_session,
 					   FR_ERROR_VALUE_INVALID_VERSION_SSLV2, SSL_AD_PROTOCOL_VERSION);
@@ -964,7 +965,7 @@ void fr_tls_session_msg_cb(int write_p, int msg_version, int content_type,
 #endif
 
 #ifdef SSL3_VERSION
-	if (!fr_cond_assert(msg_version != SSL3_VERSION)) {
+	if (msg_version == SSL3_VERSION) {
 		REDEBUG("(TLS) Invalid version (SSLv3) in handshake");
 		fr_tls_session_error_alert(request, tls_session,
 					   FR_ERROR_VALUE_INVALID_VERSION_SSLV3, SSL_AD_PROTOCOL_VERSION);
