@@ -1065,6 +1065,50 @@ int tls_handshake_recv(REQUEST *request, tls_session_t *ssn)
  *	Take cleartext user data, and encrypt it into the output buffer,
  *	to send to the client at the other end of the SSL connection.
  */
+/** Hold back TLS 1.3 session tickets until the inner authentication succeeds
+ *
+ * RFC 9427 Section 2.4: tunnelled methods "SHOULD NOT send TLS
+ * NewSessionTicket messages until the 'inner tunnel' authentication has
+ * completed".  OpenSSL would otherwise send one right after the handshake.
+ * tls_session_issue_ticket() sends it later.
+ *
+ * PEAP uses this, as the ticket can go with its Result TLV.  TTLS doesn't:
+ * there the ticket would need a Request of its own after PAP, and hostap
+ * 2.10 answers that by sending its PAP attributes again.
+ */
+void tls_session_hold_tickets(tls_session_t *ssn)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER)
+	if (!ssn->conf->session_cache_enable) return;	/* there are no tickets anyway */
+
+	SSL_set_num_tickets(ssn->ssl, 0);
+#else
+	(void) ssn;
+#endif
+}
+
+/** Issue the session ticket held back by tls_session_hold_tickets()
+ *
+ * Called once the inner authentication has succeeded.  The ticket is
+ * written to from_ssl, and goes out with the next data we send.
+ */
+void tls_session_issue_ticket(REQUEST *request, tls_session_t *ssn)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER)
+	if (!ssn->conf->session_cache_enable) return;
+	if (SSL_version(ssn->ssl) != TLS1_3_VERSION) return;	/* tickets come with the handshake */
+
+	if ((SSL_new_session_ticket(ssn->ssl) != 1) || (SSL_do_handshake(ssn->ssl) != 1)) {
+		RWDEBUG("(TLS) Failed issuing a session ticket");
+		return;
+	}
+	RDEBUG2("(TLS) Issued a session ticket, as the inner authentication succeeded");
+#else
+	(void) request;
+	(void) ssn;
+#endif
+}
+
 int tls_handshake_send(REQUEST *request, tls_session_t *ssn)
 {
 	int err;
