@@ -518,6 +518,18 @@ static fr_tls_status_t eaptls_verify(eap_handler_t *handler)
 	}
 
 	/*
+	 *	While we are sending a fragmented message, the peer
+	 *	MUST ACK each fragment (RFC 5216 Section 2.1.5).  Data
+	 *	now would be processed as the peer's next message, and
+	 *	what OpenSSL then writes would replace the rest of ours.
+	 */
+	if (tls_session->dirty_out.used > 0) {
+		REDEBUG("(TLS) EAP Peer sent data instead of an ACK, while we still have %u bytes of our message to send",
+			(unsigned int) tls_session->dirty_out.used);
+		return FR_TLS_INVALID;
+	}
+
+	/*
 	 *	Calculate this fragment's length
 	 */
 	frag_len = eap_ds->response->length -
