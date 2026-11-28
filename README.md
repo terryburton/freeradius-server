@@ -51,6 +51,7 @@ blocks, with `@NAME@` placeholders for the settings above.
 | 11 | TEAP: the peer ACKs instead of sending its Crypto-Binding: never accepted | RFC 7170 | (none needed: a regression check) |
 | 12 | EAP-pwd: the peer fragments its own messages (60, 40, 20 octets): authenticates | RFC 5931 fragmentation (the server's ACK has no L or M) | master #54 (v3.2.x already fixed) |
 | 13 | PEAP, TLS 1.3, wrong password: no session ticket before the inner authentication | RFC 9427 2.4 (SHOULD NOT) | v3.2.x #55; master delays stateless tickets only |
+| 14 | PEAP: the inner tunnel answers with a one-octet EAP-Message (needs `server-policy.conf` in the server's inner tunnel): the session fails, and nothing is tunnelled | memory safety: PEAPv0 strips a 4-octet header from it | v3.2.x (PR to come; master already, 1ea6c7fe8a) |
 
 The `#` numbers are draft pull requests on
 [terryburton/freeradius-server](https://github.com/terryburton/freeradius-server/pulls),
@@ -77,6 +78,7 @@ identities, from the environment).
 | 11 | PASS | PASS | (no TEAP) | (no TEAP) |
 | 12 | PASS | PASS | FAIL: stalls or rejected (L and M bits from uninitialised memory) | PASS (with #54) |
 | 13 | FAIL: a ticket, then the failure | PASS (with #55) | FAIL: a ticket, then the failure (stateful tickets; master delays stateless ones) | FAIL (by design in stateful mode) |
+| 14 | FAIL: the server crashes (3 of 3 runs; with the identity `bob` it sent the peer 64K of heap instead) | PASS | (not run) | (not run) |
 
 \* v3.2.x's `src/tests` server has no `Post-Auth-Type REJECT { eap }`,
 which the stock raddb has, and that is what adds the EAP-Failure.

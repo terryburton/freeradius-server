@@ -1,0 +1,27 @@
+#!/bin/bash
+#
+#  PEAP: the inner tunnel answers with an EAP-Message of one octet.
+#
+#  PEAPv0 tunnels an inner EAP packet without its 4-octet header.  An
+#  EAP-Message shorter than that has nothing to tunnel, and the server
+#  must not send what follows it in memory.  The server should fail the
+#  session.
+#
+#  The server needs server-policy.conf in its inner tunnel (see there).
+#
+. "$(dirname "$0")/../common.sh"
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+grep -q 'EAP-PEAP: Phase 2 Request: type=1' "$LOG" || { echo "SKIP  $NAME: PEAP phase 2 did not start"; exit 2; }
+#  After the inner Identity, the largest TLS record the peer was told to
+#  expect.  The one octet tunnels as 0 octets; anything near 16K or more
+#  is server memory.
+need=$(sed -n '/EAP-PEAP: Phase 2 Request: type=1/,$s/^SSL: Need \([0-9]*\) bytes more input data/\1/p' "$LOG" | sort -n | tail -1)
+[ "${need:-0}" -gt 1000 ] &&
+	fail "the server tunnelled $need octets or more after a one-octet EAP-Message (server memory)"
+grep -q 'EAPOL test timed out' "$LOG" &&
+	fail "no answer after the one-octet EAP-Message (did the server crash?)"
+got_access_accept && fail "accepted"
+grep -q 'Request: type=26' "$LOG" && { echo "SKIP  $NAME: a normal MSCHAPv2 challenge: is server-policy.conf in the inner tunnel?"; exit 2; }
+got_eap_failure || fail "no EAP-Failure"
+pass "the session failed, and nothing was tunnelled"
