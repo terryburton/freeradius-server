@@ -294,6 +294,16 @@ $(BUILD_PATH)/tests/eap/%.ok: MAC = $(shell printf '%s' $(basename $(notdir $@))
 $(BUILD_PATH)/tests/eap/%.ok: CMD =  $(EAPOL_TEST) -c $< -p $(PORT) -s $(SECRET) -M $(MAC) $(if $(NO_MPPE),-n)
 $(BUILD_PATH)/tests/eap/%.ok: LOG =  $(patsubst %.ok,%,$@).log
 
+#
+#  With TLS 1.3, the server MUST NOT set the L bit in an unfragmented
+#  message (RFC 9190 Section 2.1.9).  Succeed if a packet from the server
+#  has L (0x80) and not M (0x40), and is not the last fragment of a
+#  message, or if no unfragmented message with data and without L was seen.
+#  Packets of an inner EAP-TLS are skipped, as the inner session may use an
+#  earlier version of TLS.
+#
+TLS13_L_BIT_WRONG = awk '/Phase 2 (EAP )?Request: type=13/ { inner = 1; next } /^SSL: Received packet\(len=[0-9]*\) - Flags 0x/ { if (inner) { inner = 0; next } if (/Flags 0x[89a-f]/ && !/Flags 0x[4-7c-f]/ && !more) bad = 1; if (/len=([7-9]|[1-9][0-9]+)\) - Flags 0x0/) good = 1; more = /Flags 0x[4-7c-f]/ } END { exit !(bad || !good) }'
+
 $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(BUILD_PATH)/tests/eap radiusd.pid radiusd.kill
 	${Q}printf 'EAPOL_TEST %s ' $(notdir $(patsubst %.conf,%,$<))
 	${Q}if ! $(CMD) > $(LOG) 2>&1; then \
@@ -349,6 +359,13 @@ $(BUILD_PATH)/tests/eap/${1}-${2}.ok: $(BUILD_PATH)/tests/eap/${1}-${2}.conf
 		exit 1; \
 	elif ! grep -q '^OpenSSL: Handshake finished - resumed=1$$$$' $$(patsubst %.ok,%,$$@).log; then \
 		echo " - " FAILED - did not use resumption; \
+		echo ">>> cmd -" $$(CMD) -r 1; \
+		echo ">>> log -" $$(LOG); \
+		$(MAKE) radiusd.kill; \
+		$$(call test_record,eap,$$(notdir $$(patsubst %.ok,%,$$@)),FAIL,$$(LOG)); \
+		exit 1; \
+	elif [ "${2}" = "1.3" ] && $$(TLS13_L_BIT_WRONG) $$(LOG); then \
+		echo " - " FAILED - L bit set in an unfragmented message, or none sent without it; \
 		echo ">>> cmd -" $$(CMD) -r 1; \
 		echo ">>> log -" $$(LOG); \
 		$(MAKE) radiusd.kill; \
