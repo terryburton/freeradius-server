@@ -838,11 +838,14 @@ static EAPTLS_PACKET *eaptls_extract(REQUEST *request, EAP_DS *eap_ds, fr_tls_st
 	case FR_TLS_MORE_FRAGMENTS_WITH_LENGTH:
 	case FR_TLS_MORE_FRAGMENTS:
 	case FR_TLS_OK:
-		eap_ds->response->type.data += skip;
-		eap_ds->response->type.length -= skip;
-
-		data_len = eap_ds->response->type.length - 1 - chop;
-		data = eap_ds->response->type.data + 1;
+		/*
+		 *	Don't move type.data past the header: this EAP_DS
+		 *	becomes the next round's prev_eapds, where
+		 *	eaptls_verify() reads its flags from type.data[0],
+		 *	and TEAP reads its version from there too.
+		 */
+		data_len = eap_ds->response->type.length - skip - 1 - chop;
+		data = eap_ds->response->type.data + skip + 1;
 		break;
 
 	default:
