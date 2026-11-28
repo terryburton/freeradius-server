@@ -251,6 +251,16 @@ static int vp2eap(REQUEST *request, tls_session_t *tls_session, VALUE_PAIR *vp)
 	if (tls_session->peap_flag > 0) header = 0;
 
 	/*
+	 *	The inner tunnel (or the home server it was proxied
+	 *	to) may return an EAP-Message too short to hold what
+	 *	we skip.  Don't send what follows it.
+	 */
+	if (vp->vp_length <= header) {
+		REDEBUG("Tunneled EAP-Message is too short (%zu octets)", vp->vp_length);
+		return 0;
+	}
+
+	/*
 	 *	Remember the Identifier of the inner request, as the
 	 *	header which carries it isn't sent.
 	 */
@@ -453,8 +463,13 @@ static rlm_rcode_t CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_se
 		 *	VP's back to the client.
 		 */
 		if (vp) {
-			vp2eap(request, tls_session, vp);
+			int sent = vp2eap(request, tls_session, vp);
+
 			fr_pair_list_free(&vp);
+			if (!sent) {
+				rcode = RLM_MODULE_REJECT;
+				break;
+			}
 		}
 
 		rcode = RLM_MODULE_HANDLED;
