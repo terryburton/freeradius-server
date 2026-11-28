@@ -1,0 +1,22 @@
+#!/bin/bash
+#
+#  PEAP with TLS 1.3 and a wrong password: the inner authentication
+#  fails.
+#
+#  RFC 9427 Section 2.4: implementations "SHOULD NOT send TLS
+#  NewSessionTicket messages until the 'inner tunnel' authentication has
+#  completed".  So a peer whose inner authentication fails never gets a
+#  session ticket.  (A server that does send one must still refuse it on
+#  resumption, RFC 9427 3 and 5.1; this reproducer can't test that,
+#  because eapol_test doesn't reauthenticate after a failure.)
+#
+#  The server must allow TLS 1.3 for PEAP.
+#
+. "$(dirname "$0")/../common.sh"
+build_eapol_test
+run_eapol_test eapol_test.conf || true
+grep -q 'Using TLS version TLSv1.3' "$LOG" || { echo "SKIP  $NAME: TLS 1.3 was not negotiated"; exit 2; }
+got_access_accept && { echo "SKIP  $NAME: the wrong password was accepted?"; exit 2; }
+grep -q 'read server session ticket' "$LOG" &&
+	fail "the server sent a session ticket before the inner authentication, which then failed (RFC 9427 2.4)"
+pass "no session ticket for a peer whose inner authentication failed"
