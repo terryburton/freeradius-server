@@ -1,0 +1,9 @@
+#
+#  EAP-TLS, for a NAS with a small MTU.
+#
+type = tls
+tls {
+	tls {
+		$template tls-common
+	}
+}

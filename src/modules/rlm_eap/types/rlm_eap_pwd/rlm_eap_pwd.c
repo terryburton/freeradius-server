@@ -508,7 +508,12 @@ static unlang_action_t mod_session_init(unlang_result_t *p_result, module_ctx_t 
 	 *	The admin can dynamically change the MTU.
 	 */
 	session->mtu = inst->fragment_size;
-	vp = fr_pair_find_by_da(&request->request_pairs, NULL, attr_framed_mtu);
+
+	/*
+	 *	The method runs in a subrequest, so the Framed-MTU
+	 *	from the NAS is in the parent.
+	 */
+	vp = fr_pair_find_by_da(&request->parent->request_pairs, NULL, attr_framed_mtu);
 
 	/*
 	 *	session->mtu is *our* MTU.  We need to subtract off the EAP
@@ -519,7 +524,7 @@ static unlang_action_t mod_session_init(unlang_result_t *p_result, module_ctx_t 
 	 *	The fragmentation code deals with the included length
 	 *	so we don't need to subtract that here.
 	 */
-	if (vp && (vp->vp_uint32 > 100) && (vp->vp_uint32 < session->mtu)) session->mtu = vp->vp_uint32 - 9;
+	if (vp && (vp->vp_uint32 > 100) && ((vp->vp_uint32 - 9) < session->mtu)) session->mtu = vp->vp_uint32 - 9;
 
 	session->state = PWD_STATE_ID_REQ;
 	session->out_pos = 0;
