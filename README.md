@@ -98,8 +98,15 @@ reply at `session.max_rounds`.
   middle of the handshake.
 * 11 needs TEAP with password authentication inside, as FreeRADIUS
   v3.2.x's `eap-teap-password` test has.
-* Nesting a tunnel inside a tunnel (fixed for v3.2.x in #40) has no
-  reproducer: eapol_test cannot be configured to do it.
+* No reproducer here for these, because eapol_test can't produce them
+  without large changes. eap-frag-tools' `peer.py` tests them:
+  * nesting a tunnel inside a tunnel (v3.2.x #40);
+  * a peer sending valid tunnel data in place of an ACK (v3.2.x #47);
+  * the previous round's flags read from a length octet (v3.2.x #48;
+    shows only in the server's debug log);
+  * TTLS with TLS 1.3, where the peer sends its first AVPs with its
+    Finished, and gets no session ticket (#52, and master). eapol_test
+    sends its Finished alone.
 
 These reproducers, and the patches, were written with an AI assistant
 (Claude Code), and each has been run against an unfixed and a fixed
