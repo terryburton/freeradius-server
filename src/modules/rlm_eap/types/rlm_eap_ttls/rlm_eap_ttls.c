@@ -651,6 +651,28 @@ static unlang_action_t process_reply(unlang_result_t *p_result, request_t *reque
 		}
 
 		/*
+		 *	With TLS 1.3, the peer may send its first AVPs with its Finished.  OpenSSL then
+		 *	has the session ticket waiting in dirty_out, which an EAP-Success now would
+		 *	lose, so the peer could never resume (RFC 9427 Section 2.4 recommends always
+		 *	sending one).  Send it first, and EAP-Success when the peer ACKs it, as for
+		 *	MS-CHAP2-Success.
+		 */
+		if (fr_dbuff_remaining(tls_session->dirty_out) > 0) {
+			RDEBUG2("Sending the TLS session ticket before EAP-Success");
+
+			/*
+			 *	The last record OpenSSL reported was the peer's application data.
+			 *	Note that we are sending a handshake message (the ticket), so that
+			 *	the peer's ACK of it means the session is established.
+			 */
+			tls_session->info.origin = TLS_INFO_ORIGIN_RECORD_SENT;
+			tls_session->info.content_type = SSL3_RT_HANDSHAKE;
+			t->authenticated = true;
+			reply->code = FR_RADIUS_CODE_ACCESS_CHALLENGE;
+			RETURN_UNLANG_HANDLED;
+		}
+
+		/*
 		 *	Success: process_rcode() automatically returns MPPE keys.
 		 */
 		RETURN_UNLANG_OK;
