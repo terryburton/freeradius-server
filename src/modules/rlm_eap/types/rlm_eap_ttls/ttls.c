@@ -722,6 +722,43 @@ static rlm_rcode_t CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_se
 		}
 
 		/*
+		 *	With TLS 1.3, the peer may send its first AVPs with
+		 *	its Finished.  OpenSSL then has the session ticket
+		 *	ready for it, which an EAP-Success now would lose, so
+		 *	the peer could never resume (RFC 9427 Section 2.4
+		 *	recommends always sending one).  Send it first, and
+		 *	EAP-Success when the peer ACKs, as for MS-CHAP2-Success.
+		 */
+		if ((rcode != RLM_MODULE_HANDLED) &&
+		    ((tls_session->dirty_out.used > 0) || (BIO_ctrl_pending(tls_session->from_ssl) > 0))) {
+			int len;
+
+			len = BIO_read(tls_session->from_ssl, tls_session->dirty_out.data + tls_session->dirty_out.used,
+				       tls_session->dirty_out.size - tls_session->dirty_out.used);
+			if (len > 0) tls_session->dirty_out.used += len;
+
+			/*
+			 *	The last message OpenSSL reported was the
+			 *	peer's.  Note that we are sending one (the
+			 *	ticket, a handshake message), so that the peer's
+			 *	ACK of it is accepted.
+			 */
+			tls_session->info.origin = 1;
+			tls_session->info.content_type = SSL3_RT_HANDSHAKE;
+
+			RDEBUG("Sending the TLS session ticket before EAP-Success");
+			rcode = RLM_MODULE_HANDLED;
+			t->authenticated = true;
+
+			if (t->use_tunneled_reply) {
+				rad_assert(!t->accept_vps);
+				fr_pair_list_mcopy_by_num(t, &t->accept_vps, &reply->vps,
+					  0, 0, TAG_ANY);
+				rad_assert(!reply->vps);
+			}
+		}
+
+		/*
 		 *	Handle the ACK, by tunneling any necessary reply
 		 *	VP's back to the client.
 		 */
