@@ -383,6 +383,10 @@
 	#
 	#  fragment_size:: Limit for size of EAP fragments.
 	#
+	#  The largest EAP packet the server sends is `fragment_size` less 4
+	#  (the EAPoL header), as for a NAS `Framed-MTU` of the same value. If
+	#  the NAS sends a smaller `Framed-MTU`, that is used instead.
+	#
 	#  This can never exceed the size of a RADIUS packet (4096 bytes),
 	#  and is preferably less than half of that, to leave room for other
 	#  attributes in RADIUS packet. In most cases, the maximum EAP
@@ -1063,9 +1067,13 @@ eap {
 		#  header.
 		#
 		#  If set to `yes`, the total length of the message is included in
-		#  every packet we send. If set to `no`, the total length of the
-		#  message is included only in the First packet of a fragment
-		#  series.
+		#  every packet we send which carries TLS data, except an
+		#  unfragmented TLS 1.3 message, which must not have it (RFC 9190).
+		#  If set to `no`, the total length of the message is included only
+		#  in the first packet of a fragment series.
+		#
+		#  PEAP always behaves as `no`. TTLS has its own `include_length`,
+		#  below.
 		#
 		#  This configuration item is here only to work around historical
 		#  issues with misbehaving clients. In most cases, it does not need
