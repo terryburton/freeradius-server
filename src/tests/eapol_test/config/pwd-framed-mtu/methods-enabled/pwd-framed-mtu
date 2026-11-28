@@ -5,6 +5,6 @@ type = pwd
 pwd {
 	group = 19
 	server_id = theserver@example.com
-	fragment_size = 100
+	fragment_size = 200
 	virtual_server = "inner-tunnel"
 }
