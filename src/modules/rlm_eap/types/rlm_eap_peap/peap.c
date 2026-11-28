@@ -75,6 +75,11 @@ static int eappeap_success(eap_handler_t *handler, tls_session_t *tls_session)
 
 	RDEBUG2("SUCCESS");
 
+	/*
+	 *	The ticket goes out ahead of the Result TLV.
+	 */
+	tls_session_issue_ticket(request, tls_session);
+
 	tlv_packet[0] = PW_EAP_REQUEST;
 	tlv_packet[1] = handler->eap_ds->response->id +1;
 	tlv_packet[2] = 0;
