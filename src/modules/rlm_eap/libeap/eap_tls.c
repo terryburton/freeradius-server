@@ -1086,7 +1086,10 @@ fr_tls_status_t eaptls_process(eap_handler_t *handler)
 	if (tlspacket->dlen !=
 	    (tls_session->record_plus)(&tls_session->dirty_in, tlspacket->data, tlspacket->dlen)) {
 		talloc_free(tlspacket);
-		REDEBUG("(TLS) EAP Exceeded maximum record size");
+		REDEBUG("(TLS) EAP The peer's TLS message (%zu bytes) is larger than our receive buffer (%u bytes).  "
+			"Increase \"buffer_size\" (currently %u) in the TLS configuration",
+			tls_session->tls_record_in_total_len, (unsigned int) tls_session->dirty_in.size,
+			tls_session->conf->buffer_size);
 		status = FR_TLS_FAIL;
 		goto done;
 	}
