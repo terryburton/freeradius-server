@@ -187,19 +187,27 @@ fr_dict_attr_autoload_t rlm_eap_fast_dict_attr[] = {
 /**
  * RFC 4851 section 5.1 - EAP-FAST Authentication Phase 1: Key Derivations
  */
-static void eap_fast_init_keys(request_t *request, fr_tls_session_t *tls_session)
+static int eap_fast_init_keys(request_t *request, fr_tls_session_t *tls_session)
 {
 	eap_fast_tunnel_t *t = talloc_get_type_abort(tls_session->opaque, eap_fast_tunnel_t);
 	uint8_t *buf;
 	uint8_t *scratch;
-	size_t ksize;
+	int ksize;
 
 	RDEBUG2("Deriving EAP-FAST keys");
 
 	fr_assert(t->s_imck == NULL);
 
+	/*
+	 *	-1 if OpenSSL can't describe the negotiated cipher.  As a
+	 *	size_t, that was SIZE_MAX, which passed the old assert, and the
+	 *	key block was then read from before the buffer.
+	 */
 	ksize = fr_tls_utils_keyblock_size_get(request, tls_session->ssl);
-	fr_assert(ksize > 0);
+	if (ksize <= 0) {
+		REDEBUG("Can't determine the TLS key block size, failing EAP-FAST");
+		return -1;
+	}
 	buf = talloc_array(request, uint8_t, ksize + sizeof(*t->keyblock));
 	scratch = talloc_array(request, uint8_t, ksize + sizeof(*t->keyblock));
 
@@ -218,6 +226,8 @@ static void eap_fast_init_keys(request_t *request, fr_tls_session_t *tls_session
 
 	talloc_free(buf);
 	talloc_free(scratch);
+
+	return 0;
 }
 
 /**
@@ -1147,7 +1157,7 @@ static unlang_action_t eap_fast_process(unlang_result_t *p_result, request_t *re
 			}
 		}
 
-		eap_fast_init_keys(request, tls_session);
+		if (eap_fast_init_keys(request, tls_session) < 0) RETURN_UNLANG_FAIL;
 
 		eap_fast_send_identity_request(request, tls_session, eap_session);
 

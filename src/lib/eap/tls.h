@@ -57,10 +57,17 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 
 /** Overhead subtracted from the MTU of an EAP-TLS session which is nested inside a tunneled method.
  *
- * The outer TLS session adds a 5 octet record header, plus the IV, MAC or tag, and padding of the cipher
- * suite, to every inner EAP packet.  This value is a conservative allowance and is not an exact figure.
+ * An inner EAP packet is sent in a TLS record of the outer session, and that record in an outer EAP packet.
+ * So the inner packet must leave room for:
+ *
+ * - the outer EAP header, Type, Flags and TLS Message Length (10),
+ * - the TLS record header (5), and the IV, MAC and padding of the cipher suite: up to 16 + 48 + 16 = 80
+ *   for CBC with SHA-384,
+ * - the AVP header which TTLS adds, and its padding to a multiple of 4 (8 + 3).
+ *
+ * Otherwise each inner packet takes two outer rounds.
  */
-#define EAP_TLS_NESTED_OVERHEAD 100
+#define EAP_TLS_NESTED_OVERHEAD 106
 
 /*
  *	RFC 2716, Section 4.2:
@@ -92,6 +99,12 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 
 #define FR_TLS_EAP_BUFFER_SIZE_MIN	(2048)
 #define FR_TLS_EAP_BUFFER_SIZE_MAX	(65536)
+
+/*
+ *	An EAP packet must fit into one RADIUS packet (4096 octets),
+ *	with room for the other attributes.
+ */
+#define FR_TLS_EAP_FRAGMENT_SIZE_MAX	(4000)
 
 typedef enum : uint8_t {
 	EAP_TLS_INVALID = 0,	  			//!< Invalid, don't reply.

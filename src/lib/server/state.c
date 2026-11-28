@@ -549,6 +549,20 @@ static fr_state_entry_t *state_entry_create(fr_state_tree_t *state, request_t *r
 	entry->cleanup = fr_time_add(now, state->config.timeout);
 
 	/*
+	 *	Count the rounds of a continuing session, whichever way
+	 *	its State is made.  The RADIUS process module puts a
+	 *	State into every Access-Challenge before this is called.
+	 */
+	if (old) {
+		entry->tries++;
+
+		if (entry->tries > state->config.max_rounds) {
+			RERROR("Failed tracking state entry - too many rounds (%u)", entry->tries);
+			goto fail;
+		}
+	}
+
+	/*
 	 *	Some modules either create their own state, or need to
 	 *	synthesize it from data in a packet header.  If we
 	 *	have such a state, then use that in preference to
@@ -559,17 +573,10 @@ static fr_state_entry_t *state_entry_create(fr_state_tree_t *state, request_t *r
 		state_entry_fill(entry, &vp->data);
 
 	} else {
-		if (old) {
-			/*
-			 *	Just re-use the old state.
-			 */
-			entry->tries++;
-
-			if (entry->tries > state->config.max_rounds) {
-				RERROR("Failed tracking state entry - too many rounds (%u)", entry->tries);
-				goto fail;
-			}
-		} else {
+		/*
+		 *	A continuing session re-uses the old state.
+		 */
+		if (!old) {
 			size_t i;
 			uint32_t hash;
 

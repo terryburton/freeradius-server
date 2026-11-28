@@ -256,7 +256,7 @@ static unlang_action_t mod_process(unlang_result_t *p_result, module_ctx_t const
 		eap_round->request->type.num = FR_EAP_METHOD_PWD;
 		eap_round->request->type.length = sizeof(pwd_hdr);
 
-		MEM(eap_round->request->type.data = talloc_array(eap_round->request, uint8_t, sizeof(pwd_hdr)));
+		MEM(eap_round->request->type.data = talloc_zero_array(eap_round->request, uint8_t, sizeof(pwd_hdr)));
 
 		hdr = (pwd_hdr *)eap_round->request->type.data;
 		EAP_PWD_SET_EXCHANGE(hdr, exch);
@@ -507,8 +507,19 @@ static unlang_action_t mod_session_init(unlang_result_t *p_result, module_ctx_t 
 	/*
 	 *	The admin can dynamically change the MTU.
 	 */
-	session->mtu = inst->fragment_size;
-	vp = fr_pair_find_by_da(&request->request_pairs, NULL, attr_framed_mtu);
+	/*
+	 *	fragment_size has the same meaning as for TLS, and as a
+	 *	Framed-MTU (below): the EAP packet, plus the EAPoL header.
+	 *	session->mtu is the size of the EAP-pwd data, so subtract
+	 *	the same 9 octets.
+	 */
+	session->mtu = inst->fragment_size - 9;
+
+	/*
+	 *	The method runs in a subrequest, so the Framed-MTU
+	 *	from the NAS is in the parent.
+	 */
+	vp = fr_pair_find_by_da(&request->parent->request_pairs, NULL, attr_framed_mtu);
 
 	/*
 	 *	session->mtu is *our* MTU.  We need to subtract off the EAP
@@ -519,7 +530,7 @@ static unlang_action_t mod_session_init(unlang_result_t *p_result, module_ctx_t 
 	 *	The fragmentation code deals with the included length
 	 *	so we don't need to subtract that here.
 	 */
-	if (vp && (vp->vp_uint32 > 100) && (vp->vp_uint32 < session->mtu)) session->mtu = vp->vp_uint32 - 9;
+	if (vp && (vp->vp_uint32 > 100) && ((vp->vp_uint32 - 9) < session->mtu)) session->mtu = vp->vp_uint32 - 9;
 
 	session->state = PWD_STATE_ID_REQ;
 	session->out_pos = 0;

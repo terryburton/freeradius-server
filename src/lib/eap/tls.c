@@ -521,9 +521,14 @@ static eap_tls_status_t eap_tls_session_status(request_t *request, eap_session_t
 		REDEBUG("Unexpected ACK received:  No ongoing SSL tls_session");
 		return EAP_TLS_INVALID;
 	}
+	/*
+	 *	Nothing has been sent but the EAP-TLS Start, which the
+	 *	peer answers with its ClientHello, not with an ACK.  An
+	 *	empty Request would only bring another ACK.
+	 */
 	if (!tls_session->info.initialized) {
-		RDEBUG2("No SSL info available.  Waiting for more SSL data");
-		return EAP_TLS_RECORD_SEND;
+		REDEBUG("Unexpected ACK received:  We sent only the Start, and the peer sent no ClientHello");
+		return EAP_TLS_INVALID;
 	}
 
 	if ((tls_session->info.content_type == SSL3_RT_HANDSHAKE) &&
@@ -548,15 +553,34 @@ static eap_tls_status_t eap_tls_session_status(request_t *request, eap_session_t
 			 */
 			tls_session->info.content_type = SSL3_RT_APPLICATION_DATA;
 			return EAP_TLS_ESTABLISHED;
-		} /* else more data to send */
+		}
 
-		RDEBUG2("Peer ACKed our handshake fragment");
-		/* Fragmentation handler, send next fragment */
-		return EAP_TLS_RECORD_SEND;
+		if (fr_dbuff_remaining(tls_session->dirty_out) > 0) {
+			RDEBUG2("Peer ACKed our handshake fragment");
+			/* Fragmentation handler, send next fragment */
+			return EAP_TLS_RECORD_SEND;
+		}
+
+		/*
+		 *	We sent all of our message and the handshake isn't
+		 *	finished, so the peer should have answered with data.
+		 *	An empty Request would only bring another ACK.
+		 */
+		REDEBUG("Unexpected ACK received:  The handshake is not finished, and we have nothing more to send");
+		return EAP_TLS_INVALID;
 
 	case SSL3_RT_APPLICATION_DATA:
-		RDEBUG2("Peer ACKed our application data fragment");
-		return EAP_TLS_RECORD_SEND;
+		if (fr_dbuff_remaining(tls_session->dirty_out) > 0) {
+			RDEBUG2("Peer ACKed our application data fragment");
+			return EAP_TLS_RECORD_SEND;
+		}
+
+		/*
+		 *	We sent all of our message, so the peer should have
+		 *	answered with data.
+		 */
+		REDEBUG("Unexpected ACK received:  We have no more application data to send");
+		return EAP_TLS_INVALID;
 
 		/*
 		 *	For the rest of the conditions, switch over
@@ -568,8 +592,17 @@ static eap_tls_status_t eap_tls_session_status(request_t *request, eap_session_t
 		 *	sending the session ticket.
 		 */
 		if (tls_session->info.origin == TLS_INFO_ORIGIN_RECORD_SENT) {
-			if (fr_dbuff_remaining(tls_session->dirty_out) == 0) return EAP_TLS_ESTABLISHED;
-			return EAP_TLS_RECORD_SEND;
+			if (fr_dbuff_remaining(tls_session->dirty_out) > 0) return EAP_TLS_RECORD_SEND;
+
+			/*
+			 *	With TLS 1.3, an ACK in place of the peer's
+			 *	Finished also arrives here.  The session is
+			 *	established only if the handshake is finished.
+			 */
+			if (fr_tls_session_is_init_finished(tls_session)) return EAP_TLS_ESTABLISHED;
+
+			REDEBUG("Unexpected ACK received:  The handshake is not finished, and we have nothing more to send");
+			return EAP_TLS_INVALID;
 		}
 		REDEBUG("Invalid ACK received: %d", tls_session->info.content_type);
 		return EAP_TLS_INVALID;
@@ -706,7 +739,7 @@ static eap_tls_status_t eap_tls_verify(request_t *request, eap_session_t *eap_se
 		size_t total_len;
 
 		if (eap_tls_data->data[0] || eap_tls_data->data[1]) {
-			REDEBUG("TLS record length is > 65536");
+			REDEBUG("TLS record length is 65536 bytes or more");
 			return EAP_TLS_INVALID;
 		}
 
@@ -722,8 +755,11 @@ static eap_tls_status_t eap_tls_verify(request_t *request, eap_session_t *eap_se
 		 */
 		if (total_len > eap_tls_session->tls_session->dirty_size) {
 			REDEBUG("Reassembled TLS record will be %zu bytes, "
-				"greater than our maximum record size (%zu bytes)",
-				total_len, eap_tls_session->tls_session->dirty_size);
+				"greater than our maximum record size (%zu bytes).  "
+				"Increase \"buffer_size\" (currently %u) in the TLS configuration "
+				"to %zu or more",
+				total_len, eap_tls_session->tls_session->dirty_size,
+				eap_tls_session->tls_session->conf->buffer_size, total_len);
 			return EAP_TLS_INVALID;
 		}
 
@@ -1266,8 +1302,11 @@ eap_tls_session_t *eap_tls_session_init(request_t *request, eap_session_t *eap_s
 	 *	asking the administrator to know the internal details
 	 *	of EAP-TLS in order to calculate fragment sizes is
 	 *	just too much.
+	 *
+	 *	The method runs in a subrequest, so the Framed-MTU
+	 *	from the NAS is in the parent.
 	 */
-	vp = fr_pair_find_by_da(&request->request_pairs, NULL, attr_framed_mtu);
+	vp = fr_pair_find_by_da(&request->parent->request_pairs, NULL, attr_framed_mtu);
 
 	/*
 	 *	TLS 1.3 introduces the concept of early data (also known as zero
@@ -1313,9 +1352,17 @@ eap_tls_session_t *eap_tls_session_init(request_t *request, eap_session_t *eap_s
 	 *	the maximum amount of data we read from a TLS buffer.
 	 */
 	tls_session->mtu = conf->fragment_size - 10;
-	if (vp && (vp->vp_uint32 > 100) && (vp->vp_uint32 < tls_session->mtu)) {
+
+	/*
+	 *	The largest EAP packet we can send is the Framed-MTU
+	 *	less the EAPoL header (4), as per RFC 3579 Section 2.4
+	 *	and RFC 3580 Section 3.10.  The EAP header (4) and the
+	 *	EAP-TLS Type and Flags (2) leave the room for the TLS
+	 *	Message Length and the TLS data.
+	 */
+	if (vp && (vp->vp_uint32 > 100) && ((vp->vp_uint32 - 10) < tls_session->mtu)) {
 		RDEBUG2("Setting fragment_len from %pP", vp);
-		tls_session->mtu = vp->vp_uint32;
+		tls_session->mtu = vp->vp_uint32 - 10;
 	}
 
 	/*
@@ -1324,9 +1371,31 @@ eap_tls_session_t *eap_tls_session_init(request_t *request, eap_session_t *eap_s
 	 *	needs to be smaller than the outer one, so that the inner TLS fragments fit within the outer
 	 *	TLS fragments.
 	 */
-	if (eap_session_in_tunnel(eap_session->request) && (tls_session->mtu > (EAP_TLS_NESTED_OVERHEAD + 100))) {
-		tls_session->mtu -= EAP_TLS_NESTED_OVERHEAD;
-		RDEBUG2("Nested inside another EAP method, lowering fragment_len to %zu", tls_session->mtu);
+	if (eap_session_in_tunnel(eap_session->request)) {
+		request_t *parent;
+
+		/*
+		 *	The outer session's MTU may be smaller than ours, e.g. from the NAS's Framed-MTU.  An
+		 *	inner packet which doesn't fit into one outer fragment takes more than one round, and
+		 *	PEAPv0 then puts the wrong EAP Identifier into the inner response.
+		 */
+		for (parent = eap_session->request->parent; parent; parent = parent->parent) {
+			eap_session_t		*outer = eap_session_get(parent);
+			eap_tls_session_t	*outer_tls;
+
+			if (!outer || !outer->tunnel) continue;
+
+			outer_tls = talloc_get_type(outer->opaque, eap_tls_session_t);
+			if (outer_tls && outer_tls->tls_session && (outer_tls->tls_session->mtu < tls_session->mtu)) {
+				tls_session->mtu = outer_tls->tls_session->mtu;
+			}
+			break;
+		}
+
+		if (tls_session->mtu > (EAP_TLS_NESTED_OVERHEAD + 100)) {
+			tls_session->mtu -= EAP_TLS_NESTED_OVERHEAD;
+			RDEBUG2("Nested inside another EAP method, lowering fragment_len to %zu", tls_session->mtu);
+		}
 	}
 
 	/*
@@ -1440,6 +1509,12 @@ void eap_tls_conf_check(CONF_SECTION *cs, fr_tls_conf_t *tls_conf, bool delayed_
 		cf_log_warn_by_child(cs, "tls", "Lowering EAP buffer_size from %u to %u",
 				     tls_conf->buffer_size, (unsigned int) FR_TLS_EAP_BUFFER_SIZE_MAX);
 		tls_conf->buffer_size = FR_TLS_EAP_BUFFER_SIZE_MAX;
+	}
+
+	if (tls_conf->fragment_size > FR_TLS_EAP_FRAGMENT_SIZE_MAX) {
+		cf_log_warn_by_child(cs, "tls", "Lowering EAP fragment_size from %u to %u",
+				     tls_conf->fragment_size, (unsigned int) FR_TLS_EAP_FRAGMENT_SIZE_MAX);
+		tls_conf->fragment_size = FR_TLS_EAP_FRAGMENT_SIZE_MAX;
 	}
 }
 

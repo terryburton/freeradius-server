@@ -445,8 +445,13 @@ eap_session_t *eap_session_continue(void const *instance, eap_packet_raw_t **eap
 		}
 
 		(void) talloc_get_type_abort(eap_session, eap_session_t);
+		/*
+		 *	The session's max_rounds (at most 100) is the usual
+		 *	limit.  This one is only a backstop, so it mustn't
+		 *	be lower.
+		 */
 		eap_session->rounds++;
-		if (eap_session->rounds >= 50) {
+		if (eap_session->rounds >= 100) {
 			RERROR("Failing EAP session due to too many round trips");
 			goto error;
 		}
@@ -465,6 +470,22 @@ eap_session_t *eap_session_continue(void const *instance, eap_packet_raw_t **eap
 			RERROR("We expected EAP type %s, but received type %s",
 			       eap_type2name(eap_session->type),
 			       eap_type2name((eap_type_t)eap_packet->data[0]));
+			RERROR("Your Supplicant or NAS is probably broken");
+			goto error;
+		}
+
+		/*
+		 *	RFC 3748 Section 4.1: "An authenticator receiving a
+		 *	Response whose Identifier value does not match that of
+		 *	the currently outstanding Request MUST silently discard
+		 *	the Response."  The session is found by State alone, so
+		 *	without this the Response would be processed, and the
+		 *	next Request built from its Identifier.
+		 */
+		if (eap_session->prev_round && eap_session->prev_round->request &&
+		    (eap_packet->id != eap_session->prev_round->request->id)) {
+			RERROR("Response has EAP Identifier %u, but the outstanding Request has %u",
+			       eap_packet->id, eap_session->prev_round->request->id);
 			RERROR("Your Supplicant or NAS is probably broken");
 			goto error;
 		}
