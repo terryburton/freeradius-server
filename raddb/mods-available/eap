@@ -367,10 +367,17 @@ eap {
 		#  is now configurable.  The buffer size should be large enough
 		#  to hold one full TLS record, which might be as large as 64K.
 		#
-		#  The minimum size is 4K.  The maximum is 64K.
+		#  The minimum size is 2K.  The maximum is 64K.  It is
+		#  raised to fragment_size if that is larger.
 		#
 #		buffer_size = 65536
 
+		#  The largest EAP packet the server sends is
+		#  fragment_size less 4 (the EAPoL header),
+		#  as for a NAS Framed-MTU of the same value.
+		#  If the NAS sends a smaller Framed-MTU, that
+		#  is used instead.
+		#
 		#  This can never exceed the size of a RADIUS
 		#  packet (4096 bytes), and is preferably half
 		#  that, to accommodate other attributes in
@@ -382,12 +389,18 @@ eap {
 	#	fragment_size = 1024
 
 		#  include_length is a flag which is
-		#  by default set to yes If set to
-		#  yes, Total Length of the message is
-		#  included in EVERY packet we send.
-		#  If set to no, Total Length of the
-		#  message is included ONLY in the
-		#  First packet of a fragment series.
+		#  by default set to yes.  If set to
+		#  yes, the TLS Message Length is
+		#  included in every packet we send
+		#  which carries TLS data, except an
+		#  unfragmented TLS 1.3 message, which
+		#  must not have it (RFC 9190).  If set
+		#  to no, it is included ONLY in the
+		#  first packet of a fragment series.
+		#
+		#  PEAP, FAST and TEAP always behave as
+		#  "no".  TTLS has its own include_length
+		#  (in the "ttls" section below).
 		#
 	#	include_length = yes
 
