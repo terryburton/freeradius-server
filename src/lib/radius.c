@@ -1890,6 +1890,12 @@ static const bool code2ma[FR_MAX_PACKET_CODE] = {
  *
  * If packet->data is already set, and is large enough for the new
  * packet, then just overwrite it.  Otherwise, allocate data.
+ *
+ * @return
+ *	- 0 on success.
+ *	- 1 if the packet was encoded, but some attributes did not fit
+ *	  into it.  fr_strerror() says which.
+ *	- -1 on error.
  */
 int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	       char const *secret)
@@ -1900,6 +1906,8 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	int			len;
 	VALUE_PAIR const	*reply;
 	bool			seen_ma = false;
+	char const		*not_sent = NULL;
+	bool			truncated = false;
 
 	/*
 	 *	A 4K packet, aligned on 64-bits.  The buffer is per-thread,
@@ -2086,6 +2094,8 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			}
 		}
 
+		last_name = reply->da->name;
+
 		/*
 		 *	Set the Message-Authenticator to the correct
 		 *	length and initial value.
@@ -2099,7 +2109,10 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 				continue;
 			}
 
-			if (room < 18) break;
+			if (room < 18) {
+				not_sent = last_name;
+				break;
+			}
 
 			/*
 			 *	Cache the offset to the
@@ -2108,11 +2121,25 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			packet->offset = total_length;
 			last_len = 16;
 		} else {
-			if (room < (2 + reply->vp_length)) break;
+			if (room < (2 + reply->vp_length)) {
+				not_sent = last_name;
+				break;
+			}
 
 			last_len = reply->vp_length;
+
+			/*
+			 *	"concat" attributes such as EAP-Message
+			 *	are split into chunks of 253 octets, each
+			 *	with a header.  The encoder truncates them
+			 *	to fit.
+			 */
+			if (reply->da->flags.concat &&
+			    (room < (reply->vp_length + 2 * ((reply->vp_length + 252) / 253)))) {
+				not_sent = last_name;
+				truncated = true;
+			}
 		}
-		last_name = reply->da->name;
 
 		/*
 		 *	Note that this also checks "room", as the
@@ -2128,6 +2155,7 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 		if (len == 0) {
 			if (last_len != 0) {
 				fr_strerror_printf("WARNING: Failed encoding attribute %s\n", last_name);
+				not_sent = last_name;
 				break;
 			} else {
 				fr_strerror_printf("WARNING: Skipping zero-length attribute %s\n", last_name);
@@ -2139,6 +2167,8 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 #endif
 		ptr += len;
 		total_length += len;
+
+		if (truncated) break;
 	} /* done looping over all attributes */
 
 	/*
@@ -2168,6 +2198,15 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 
 	total_length = htons(total_length);
 	memcpy(hdr->length, &total_length, sizeof(total_length));
+
+	/*
+	 *	Tell the caller that the packet is missing attributes.
+	 */
+	if (not_sent) {
+		fr_strerror_printf("Attribute %s %s, as the packet is full",
+				   not_sent, truncated ? "was truncated, and the attributes after it were not sent" : "and the attributes after it were not sent");
+		return 1;
+	}
 
 	return 0;
 }

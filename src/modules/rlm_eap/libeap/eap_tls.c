@@ -316,9 +316,12 @@ int eaptls_request(EAP_DS *eap_ds, tls_session_t *ssn, bool start)
 	if (start) reply.flags = SET_START(reply.flags);
 
 	/*
+	 *	Leave room for the TLS Message Length, which the first
+	 *	fragment of a message must have.
+	 *
 	 *	This is only true for TEAP, so only TEAP has to check the return value of this function.
 	 */
-	if (lbit + obit + olen >= ssn->mtu) {
+	if (4 + obit + olen >= ssn->mtu) {
 		ERROR("fragment_size is too small for outer TLVs");
 		return -1;
 	}
@@ -327,12 +330,16 @@ int eaptls_request(EAP_DS *eap_ds, tls_session_t *ssn, bool start)
 
 	/* Send data, NOT more than the FRAGMENT size */
 	if (ssn->dirty_out.used > tls_mtu) {
-		size = tls_mtu;
 		reply.flags = SET_MORE_FRAGMENTS(reply.flags);
-		/* Length MUST be included if it is the First Fragment */
-		if (ssn->fragment == 0) {
+		/*
+		 *	Length MUST be included if it is the First
+		 *	Fragment, and it takes room from the data.
+		 */
+		if ((ssn->fragment == 0) && !lbit) {
 			lbit = 4;
+			tls_mtu -= lbit;
 		}
+		size = tls_mtu;
 		ssn->fragment = 1;
 	} else {
 		size = ssn->dirty_out.used;
@@ -514,6 +521,18 @@ static fr_tls_status_t eaptls_verify(eap_handler_t *handler)
 	 */
 	if (TLS_START(eaptls_packet->flags)) {
 		REDEBUG("(TLS) EAP Peer sent EAP-TLS Start message (only the server is allowed to do this)");
+		return FR_TLS_INVALID;
+	}
+
+	/*
+	 *	While we are sending a fragmented message, the peer
+	 *	MUST ACK each fragment (RFC 5216 Section 2.1.5).  Data
+	 *	now would be processed as the peer's next message, and
+	 *	what OpenSSL then writes would replace the rest of ours.
+	 */
+	if (tls_session->dirty_out.used > 0) {
+		REDEBUG("(TLS) EAP Peer sent data instead of an ACK, while we still have %u bytes of our message to send",
+			(unsigned int) tls_session->dirty_out.used);
 		return FR_TLS_INVALID;
 	}
 
@@ -819,11 +838,14 @@ static EAPTLS_PACKET *eaptls_extract(REQUEST *request, EAP_DS *eap_ds, fr_tls_st
 	case FR_TLS_MORE_FRAGMENTS_WITH_LENGTH:
 	case FR_TLS_MORE_FRAGMENTS:
 	case FR_TLS_OK:
-		eap_ds->response->type.data += skip;
-		eap_ds->response->type.length -= skip;
-
-		data_len = eap_ds->response->type.length - 1 - chop;
-		data = eap_ds->response->type.data + 1;
+		/*
+		 *	Don't move type.data past the header: this EAP_DS
+		 *	becomes the next round's prev_eapds, where
+		 *	eaptls_verify() reads its flags from type.data[0],
+		 *	and TEAP reads its version from there too.
+		 */
+		data_len = eap_ds->response->type.length - skip - 1 - chop;
+		data = eap_ds->response->type.data + skip + 1;
 		break;
 
 	default:
@@ -1086,7 +1108,10 @@ fr_tls_status_t eaptls_process(eap_handler_t *handler)
 	if (tlspacket->dlen !=
 	    (tls_session->record_plus)(&tls_session->dirty_in, tlspacket->data, tlspacket->dlen)) {
 		talloc_free(tlspacket);
-		REDEBUG("(TLS) EAP Exceeded maximum record size");
+		REDEBUG("(TLS) EAP The peer's TLS message (%zu bytes) is larger than our receive buffer (%u bytes).  "
+			"Increase \"buffer_size\" (currently %u) in the TLS configuration",
+			tls_session->tls_record_in_total_len, (unsigned int) tls_session->dirty_in.size,
+			tls_session->conf->buffer_size);
 		status = FR_TLS_FAIL;
 		goto done;
 	}
@@ -1322,6 +1347,16 @@ fr_tls_server_conf_t *eaptls_conf_parse(CONF_SECTION *cs, char const *attr)
 
 	if (!tls_cs)
 		return NULL;
+
+	/*
+	 *	Several EAP methods may use the same tls-config
+	 *	section, which is parsed once and then cached.  If
+	 *	another method has already parsed it, then the checks
+	 *	and the adjustment of the fragment size below have
+	 *	already been done, and must not be done again.
+	 */
+	tls_conf = cf_data_find(tls_cs, "tls-conf");
+	if (tls_conf) return tls_conf;
 
 	tls_conf = tls_server_conf_parse(tls_cs, true);
 

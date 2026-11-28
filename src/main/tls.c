@@ -837,7 +837,40 @@ after_chain:
 	 *	just too much.
 	 */
 	state->mtu = conf->fragment_size;
-#define EAP_TLS_MAGIC_OVERHEAD (63)
+
+	/*
+	 *	An inner packet is sent in a TLS record of the outer
+	 *	session, and that record in an outer EAP packet.  So the
+	 *	inner packet must leave room for:
+	 *
+	 *	  - the outer EAP header, Type, Flags and TLS Message
+	 *	    Length (10),
+	 *	  - the TLS record header (5), and the IV, MAC and padding
+	 *	    of the cipher: up to 16 + 48 + 16 = 80 for CBC with
+	 *	    SHA-384,
+	 *	  - the AVP header which TTLS adds, and its padding to a
+	 *	    multiple of 4 (8 + 3).
+	 *
+	 *	Otherwise each inner packet takes two outer rounds.
+	 */
+#define EAP_TLS_MAGIC_OVERHEAD (106)
+
+	/*
+	 *	The largest EAP packet we can send is the Framed-MTU
+	 *	less the EAPoL header (4), as per RFC 3579 Section 2.4
+	 *	and RFC 3580 Section 3.10.  The EAP header (4) and the
+	 *	EAP-TLS Type and Flags (2) leave what eaptls_request()
+	 *	has for the TLS Message Length and the TLS data, as it
+	 *	makes room for the TLS Message Length itself.
+	 *
+	 *	eaptls_conf_parse() subtracts the same 10 octets from
+	 *	fragment_size, counted as the EAP header (4), Type and
+	 *	Flags (2), and TLS Message Length (4).  As the length
+	 *	is then subtracted again here, the effect is the same:
+	 *	a fragment_size and a Framed-MTU of the same value give
+	 *	EAP packets of that value less 4.
+	 */
+#define EAP_TLS_FRAMED_MTU_OVERHEAD (10)
 
 	/*
 	 *	If the packet contains an MTU, then use that.  We
@@ -845,8 +878,8 @@ after_chain:
 	 */
 	vp = fr_pair_find_by_num(request->packet->vps, PW_FRAMED_MTU, 0, TAG_ANY);
 	if (vp) {
-		if ((vp->vp_integer > 100) && (vp->vp_integer < state->mtu)) {
-			state->mtu = vp->vp_integer;
+		if ((vp->vp_integer > 100) && ((vp->vp_integer - EAP_TLS_FRAMED_MTU_OVERHEAD) < state->mtu)) {
+			state->mtu = vp->vp_integer - EAP_TLS_FRAMED_MTU_OVERHEAD;
 		}
 
 	} else if (request->parent) {
@@ -890,10 +923,16 @@ static bool tls_dirty_out_full(REQUEST *request, tls_session_t *ssn)
 
 	if (pending <= 0) return false;
 
+	/*
+	 *	The output buffer is a little larger than buffer_size,
+	 *	and is always at least as large.  So a buffer_size of
+	 *	all of the data is enough.
+	 */
 	RERROR("(TLS) %s - %d more bytes of TLS data were not written into the output "
 	       "buffer.  Increase \"buffer_size\" (currently %u) in the TLS configuration "
-               "to %zu or more.  This issues is usually caused by a large certificate "
-               "chain." , ssn->conf->name, pending, ssn->conf->buffer_size + pending);
+               "to %zu or more.  This issue is usually caused by a large certificate "
+               "chain." , ssn->conf->name, pending, ssn->conf->buffer_size,
+	       ssn->dirty_out.used + (size_t) pending);
 	return true;
 }
 
@@ -1065,6 +1104,50 @@ int tls_handshake_recv(REQUEST *request, tls_session_t *ssn)
  *	Take cleartext user data, and encrypt it into the output buffer,
  *	to send to the client at the other end of the SSL connection.
  */
+/** Hold back TLS 1.3 session tickets until the inner authentication succeeds
+ *
+ * RFC 9427 Section 2.4: tunnelled methods "SHOULD NOT send TLS
+ * NewSessionTicket messages until the 'inner tunnel' authentication has
+ * completed".  OpenSSL would otherwise send one right after the handshake.
+ * tls_session_issue_ticket() sends it later.
+ *
+ * PEAP uses this, as the ticket can go with its Result TLV.  TTLS doesn't:
+ * there the ticket would need a Request of its own after PAP, and hostap
+ * 2.10 answers that by sending its PAP attributes again.
+ */
+void tls_session_hold_tickets(tls_session_t *ssn)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER)
+	if (!ssn->conf->session_cache_enable) return;	/* there are no tickets anyway */
+
+	SSL_set_num_tickets(ssn->ssl, 0);
+#else
+	(void) ssn;
+#endif
+}
+
+/** Issue the session ticket held back by tls_session_hold_tickets()
+ *
+ * Called once the inner authentication has succeeded.  The ticket is
+ * written to from_ssl, and goes out with the next data we send.
+ */
+void tls_session_issue_ticket(REQUEST *request, tls_session_t *ssn)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L && !defined(LIBRESSL_VERSION_NUMBER)
+	if (!ssn->conf->session_cache_enable) return;
+	if (SSL_version(ssn->ssl) != TLS1_3_VERSION) return;	/* tickets come with the handshake */
+
+	if ((SSL_new_session_ticket(ssn->ssl) != 1) || (SSL_do_handshake(ssn->ssl) != 1)) {
+		RWDEBUG("(TLS) Failed issuing a session ticket");
+		return;
+	}
+	RDEBUG2("(TLS) Issued a session ticket, as the inner authentication succeeded");
+#else
+	(void) request;
+	(void) ssn;
+#endif
+}
+
 int tls_handshake_send(REQUEST *request, tls_session_t *ssn)
 {
 	int err;
@@ -2097,6 +2180,18 @@ static SSL_SESSION *cbtls_get_session(SSL *ssl, const unsigned char *data, int l
 
 	RDEBUG2("Peer requested cached session: %s", buffer);
 
+	/*
+	 *	Remember it, as a resumed TLS 1.3 session gets a new ID.
+	 */
+	{
+		tls_session_t *ssn = SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_SSN);
+
+		if (ssn) {
+			talloc_free(ssn->resumed_session_id);
+			ssn->resumed_session_id = talloc_strdup(ssn, buffer);
+		}
+	}
+
 	*copy = 0;
 
 	conf = (fr_tls_server_conf_t *)SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_CONF);
@@ -2493,10 +2588,8 @@ static SSL_SESSION *cbtls_cache_load(SSL *ssl, const unsigned char *data, int le
 	size = len;
 	if (size > MAX_SESSION_SIZE) size = MAX_SESSION_SIZE;
 
-	if (fr_debug_lvl > 1) {
-		fr_bin2hex(buffer, data, size);
-		RDEBUG2("Peer requested cached session: %s", buffer);
-	}
+	fr_bin2hex(buffer, data, size);
+	RDEBUG2("Peer requested cached session: %s", buffer);
 
 	*copy = 0;
 
@@ -2607,6 +2700,19 @@ static SSL_SESSION *cbtls_cache_load(SSL *ssl, const unsigned char *data, int le
 
 	SSL_SESSION_set_ex_data(sess, fr_tls_ex_index_vps, vps);
 	RDEBUG("Successfully restored session %s", buffer);
+
+	/*
+	 *	Remember it, as a resumed TLS 1.3 session gets a new ID.
+	 */
+	{
+		tls_session_t *ssn = SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_SSN);
+
+		if (ssn) {
+			talloc_free(ssn->resumed_session_id);
+			ssn->resumed_session_id = talloc_strdup(ssn, buffer);
+			ssn->resumed_vps = vps;
+		}
+	}
 	rdebug_pair_list(L_DBG_LVL_2, request, vps, "reply:");
 
 	/*
@@ -5426,6 +5532,25 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 	talloc_ctx = SSL_get_ex_data(ssn->ssl, FR_TLS_EX_INDEX_TALLOC);
 
 	/*
+	 *	tls_new_session() caches the fragment size as the first
+	 *	Framed-MTU in session-state, for the use of an EAP
+	 *	method inside of the TLS tunnel.  It is not a reply
+	 *	attribute: a Framed-MTU in an Access-Accept tells the
+	 *	NAS which MTU to configure for the user (RFC 2865
+	 *	Section 5.12).  So remove that one before post-auth
+	 *	copies session-state to the reply.  Any Framed-MTU
+	 *	which policy added to session-state after it, such as
+	 *	one copied from the inner tunnel's reply, stays.
+	 */
+	{
+		vp_cursor_t cursor;
+
+		fr_cursor_init(&cursor, &request->state);
+		vp = fr_cursor_next_by_num(&cursor, PW_FRAMED_MTU, 0, TAG_ANY);
+		if (vp && (vp->vp_integer == ssn->mtu)) talloc_free(fr_cursor_remove(&cursor));
+	}
+
+	/*
 	 *	If there's no session resumption, delete the entry
 	 *	from the cache.  This means either it's disabled
 	 *	globally for this SSL context, OR we were told to
@@ -5609,29 +5734,65 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 	 *	Else the session WAS allowed.  Copy the cached reply.
 	 */
 	} else {
+		char buffer[2 * MAX_SESSION_SIZE + 1];
+
 		RDEBUG("(TLS) cache - Refreshing entry for session resumption");
+
+#if OPENSSL_VERSION_NUMBER >= 0x10001000L
+#ifdef TLS1_3_VERSION
+		/*
+		 *	OpenSSL frees the underlying session out from
+		 *	under us in TLS 1.3.
+		 */
+		if (SSL_version(ssn->ssl) == TLS1_3_VERSION) ssn->ssl_session = SSL_get_session(ssn->ssl);
+#endif
+#endif
+
+		tls_session_id(ssn->ssl_session, buffer, MAX_SESSION_SIZE);
 
 		/*
 		 *	The "restore VPs from OpenSSL cache" code is
 		 *	now in eaptls_process()
 		 */
 		if (conf->session_cache_path) {
-			char buffer[2 * MAX_SESSION_SIZE + 1];
-
-#if OPENSSL_VERSION_NUMBER >= 0x10001000L
-#ifdef TLS1_3_VERSION
-			/*
-			 *	OpenSSL frees the underlying session out from
-			 *	under us in TLS 1.3.
-			 */
-			if (SSL_version(ssn->ssl) == TLS1_3_VERSION) ssn->ssl_session = SSL_get_session(ssn->ssl);
-#endif
-#endif
-
-			tls_session_id(ssn->ssl_session, buffer, MAX_SESSION_SIZE);
-
 			/* "touch" the cached session/vp file */
 			char filename[3 * MAX_SESSION_SIZE + 1];
+
+			/*
+			 *	A resumed TLS 1.3 session has a new ID, and
+			 *	the ticket sent to the peer is for that one.
+			 *	Copy the attributes of the session which was
+			 *	resumed, so that it can be resumed in turn.
+			 */
+			if (ssn->resumed_session_id && (strcmp(ssn->resumed_session_id, buffer) != 0)) {
+				char	old_filename[3 * MAX_SESSION_SIZE + 1];
+				FILE	*in, *out;
+
+				snprintf(old_filename, sizeof(old_filename), "%s%c%s.vps",
+					 conf->session_cache_path, FR_DIR_SEP, ssn->resumed_session_id);
+				snprintf(filename, sizeof(filename), "%s%c%s.vps",
+					 conf->session_cache_path, FR_DIR_SEP, buffer);
+
+				in = fopen(old_filename, "r");
+				if (!in) {
+					RWDEBUG("(TLS) Could not read session VPs from persistent cache: %s",
+						fr_syserror(errno));
+				} else {
+					out = fopen(filename, "wx");
+					if (out) {
+						char	copy[1024];
+						size_t	len;
+
+						RDEBUG2("Saving session %s in the disk cache, from session %s",
+							buffer, ssn->resumed_session_id);
+						while ((len = fread(copy, 1, sizeof(copy), in)) > 0) {
+							if (fwrite(copy, 1, len, out) != len) break;
+						}
+						fclose(out);
+					}
+					fclose(in);
+				}
+			}
 
 			snprintf(filename, sizeof(filename), "%s%c%s.asn1",
 				 conf->session_cache_path, FR_DIR_SEP, buffer);
@@ -5642,7 +5803,18 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 		}
 
 		if (conf->session_cache_server) {
-			cbtls_cache_refresh(ssn->ssl, ssn->ssl_session);
+			/*
+			 *	A resumed TLS 1.3 session has a new ID, which
+			 *	isn't in the cache.  Save it, with the
+			 *	attributes of the session which was resumed.
+			 */
+			if (ssn->resumed_session_id && (strcmp(ssn->resumed_session_id, buffer) != 0)) {
+				RDEBUG2("Saving session %s in the cache, from session %s",
+					buffer, ssn->resumed_session_id);
+				cbtls_cache_save_vps(ssn->ssl, ssn->ssl_session, ssn->resumed_vps);
+			} else {
+				cbtls_cache_refresh(ssn->ssl, ssn->ssl_session);
+			}
 		}
 
 		/*
@@ -5774,9 +5946,14 @@ fr_tls_status_t tls_ack_handler(tls_session_t *ssn, REQUEST *request)
 		REDEBUG("(TLS) Unexpected ACK received:  No ongoing SSL session");
 		return FR_TLS_INVALID;
 	}
+	/*
+	 *	Nothing has been sent but the EAP-TLS Start, which the
+	 *	peer answers with its ClientHello, not with an ACK.  An
+	 *	empty Request would only bring another ACK.
+	 */
 	if (!ssn->info.initialized) {
-		RDEBUG("(TLS) No SSL info available.  Waiting for more SSL data");
-		return FR_TLS_REQUEST;
+		REDEBUG("(TLS) Unexpected ACK received:  We sent only the Start, and the peer sent no ClientHello");
+		return FR_TLS_INVALID;
 	}
 
 	if ((ssn->info.content_type == handshake) && (ssn->info.origin == 0)) {
@@ -5812,8 +5989,18 @@ fr_tls_status_t tls_ack_handler(tls_session_t *ssn, REQUEST *request)
 		return FR_TLS_FAIL;
 
 	case application_data:
-		RDEBUG2("(TLS) Peer ACKed our application data fragment");
-		return FR_TLS_REQUEST;
+		if (ssn->dirty_out.used > 0) {
+			RDEBUG2("(TLS) Peer ACKed our application data fragment");
+			return FR_TLS_REQUEST;
+		}
+
+		/*
+		 *	We sent all of our message, so the peer should have
+		 *	answered with data.  An empty Request would only
+		 *	bring another ACK.
+		 */
+		REDEBUG("(TLS) Cannot continue, as the peer is misbehaving.");
+		return FR_TLS_FAIL;
 
 		/*
 		 *	For the rest of the conditions, switch over

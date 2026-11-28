@@ -192,6 +192,12 @@ static int mod_session_init(void *type_arg, eap_handler_t *handler)
 		return 0;
 	}
 
+	/*
+	 *	No session ticket until the inner authentication has
+	 *	succeeded (RFC 9427 Section 2.4).
+	 */
+	tls_session_hold_tickets(ssn);
+
 	handler->opaque = ((void *)ssn);
 
 	/*

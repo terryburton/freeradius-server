@@ -183,6 +183,7 @@ config/eap-test: $(RADDB_PATH)mods-available/eap config/eap-test-inner-tunnel co
 	     -e 's/= inner-tunnel/= eap-test-inner-tunnel/;s/use_tunneled_reply = no/use_tunneled_reply = yes/' \
 	     -e 's/enable = no/enable = yes/' \
 	     -e 's/^#\(\tdedup_key = \)/\1/' \
+	     -e 's/^#\tmax_rounds = 50/\tmax_rounds = 100/' \
 	     -e 's/^\(.*\)persist_dir =/  persist_dir =/' \
 	     -e 's/#.*softfail =.*/softfail = yes/' \
 	     -e 's/tls_min_version = "1.2"/tls_min_version = "1.0"/' \
@@ -247,8 +248,14 @@ ifneq "$(OPENSSL_LIBS)" ""
 EAP_FILES += eap-psk.conf
 ifeq "$(OPENSSL3_OK)" "yes"
 EAP_FILES += eap-pwd.conf
+EAP_FILES += eap-pwd-small-mtu.conf
 endif
 endif
+
+#
+#  More than 50 round trips, which needs max_rounds.
+#
+EAP_FILES       += eap-tls-many-rounds.conf
 
 EAP_TLS_FILES    = eap-tls.conf
 EAP_TLS_FILES   += eap-ttls-eap-gtc.conf
@@ -258,11 +265,28 @@ EAP_TLS_FILES   += eap-ttls-mschapv2.conf
 EAP_TLS_FILES   += eap-ttls-pap.conf
 EAP_TLS_FILES   += peap-client-mschapv2.conf
 EAP_TLS_FILES   += peap-eap-tls.conf
+EAP_FILES       += peap-eap-tls-cbc.conf
 EAP_TLS_FILES   += peap-gtc.conf
 EAP_TLS_FILES   += peap-mschapv2.conf
 
 #EAP_TLS_FILES   += eap-fast.conf		# disabled in default config
 #EAP_TLS_FILES   += eap-teap-mschapv2.conf	# not configured in eapol_test
+
+#
+#  The "test" virtual server sets Framed-MTU = 600 for these.
+#
+EAP_FRAMED_MTU_FILES  = eap-tls-framed-mtu.conf
+EAP_FRAMED_MTU_FILES += peap-framed-mtu.conf
+
+#
+#  The "test" virtual server adds Framed-MTU = 1300 to session-state for these.
+#
+EAP_SESSION_STATE_FILES = eap-tls-session-state.conf
+
+#
+#  The client's TLS message is longer than one TLS record.
+#
+EAP_FILES       += eap-tls-large-cert.conf
 
 EAP_TLS_VERSIONS = 1.1 1.2
 EAP_TLS_DISABLE_STRING = tls_disable_tlsv1_0=1 tls_disable_tlsv1_1=1 tls_disable_tlsv1_2=1
@@ -270,6 +294,11 @@ EAP_TLS_DISABLE_STRING = tls_disable_tlsv1_0=1 tls_disable_tlsv1_1=1 tls_disable
 ifneq "$(TLS1_3)" ""
 EAP_TLS_VERSIONS       += 1.3
 EAP_TLS_DISABLE_STRING += tls_disable_tlsv1_3=1
+
+#
+#  Each resumption of a TLS 1.3 session must be resumable in turn.
+#
+EAP_FILES              += eap-tls-13-resume.conf
 endif
 
 .PHONY: $(BUILD_PATH)/tests/eap
@@ -291,8 +320,60 @@ clean.tests.eap:
 #
 $(BUILD_PATH)/tests/eap/%.ok: NO_MPPE = $(filter eap-md5,$(basename $(notdir $@)))
 $(BUILD_PATH)/tests/eap/%.ok: MAC = $(shell printf '%s' $(basename $(notdir $@)) | cksum | awk '{ printf "02:00:%02x:%02x:%02x:%02x", int($$1 / 16777216) % 256, int($$1 / 65536) % 256, int($$1 / 256) % 256, $$1 % 256 }')
-$(BUILD_PATH)/tests/eap/%.ok: CMD =  $(EAPOL_TEST) -c $< -p $(PORT) -s $(SECRET) -M $(MAC) $(if $(NO_MPPE),-n)
+$(BUILD_PATH)/tests/eap/%.ok: CMD =  $(EAPOL_TEST) -c $< -p $(PORT) -s $(SECRET) -M $(MAC) $(if $(NO_MPPE),-n) $(if $(RESUMES),-r $(RESUMES))
 $(BUILD_PATH)/tests/eap/%.ok: LOG =  $(patsubst %.ok,%,$@).log
+$(BUILD_PATH)/tests/eap/%.ok: TLS_METHOD = $(filter $(basename $(EAP_TLS_FILES)),$(basename $(notdir $@)))
+$(BUILD_PATH)/tests/eap/%.ok: FRAMED_MTU = $(if $(filter $(basename $(EAP_FRAMED_MTU_FILES)),$(basename $(notdir $@))),600)
+
+#
+#  The length of each EAP packet the server sends, from the eapol_test log.
+#
+EAP_LARGEST_REQUEST = sed -n 's/^decapsulated EAP packet (code=1 id=[0-9]* len=\([0-9]*\)).*/\1/p'
+
+#
+#  The TLS-based methods all use the default fragment_size of 1024.  The
+#  largest EAP packet the server sends must use it, less the 4 octets of
+#  EAPoL header: 1020 octets.
+#
+FRAGMENT_SIZE_OK = largest=`$(EAP_LARGEST_REQUEST) $(1) | sort -n | tail -1`; [ "$$largest" -eq 1020 ]
+
+#
+#  With a Framed-MTU, the largest EAP packet the server sends must be the
+#  Framed-MTU less the 4 octets of EAPoL header (RFC 3579 Section 2.4).
+#
+FRAMED_MTU_OK = largest=`$(EAP_LARGEST_REQUEST) $(1) | sort -n | tail -1`; [ "$$largest" -eq `expr $(2) - 4` ]
+
+$(BUILD_PATH)/tests/eap/%.ok: ACCEPT_FRAMED_MTU = $(if $(filter $(basename $(EAP_SESSION_STATE_FILES)),$(basename $(notdir $@))),1300 accept,accept)
+
+#
+#  The EAP-TLS fragment size is cached in session-state:Framed-MTU, for
+#  the use of an inner tunnel.  It must not be sent in the Access-Accept,
+#  where it would tell the NAS the MTU to configure for the user.  But a
+#  Framed-MTU which policy puts in session-state must still be sent.
+#
+#  List "accept" for the Access-Accepts, so that there must be one, and
+#  the value of each Framed-MTU in them.
+#
+ACCEPT_FRAMED_MTU_SEEN = awk '/^RADIUS message: code=/ { accept = /code=2 /; if (accept) print "accept" } accept && /Attribute 12 \(Framed-MTU\)/ { getline; sub(/.*Value: /, ""); print }' $(1) | LC_ALL=C sort -u | paste -sd ' ' -
+
+#
+#  With TLS 1.3, the server MUST NOT set the L bit in an unfragmented
+#  message (RFC 9190 Section 2.1.9).  Succeed if a packet from the server
+#  has L (0x80) and not M (0x40), and is not the last fragment of a
+#  message, or if no unfragmented message with data and without L was seen.
+#  Packets of an inner EAP-TLS are skipped, as the inner session may use an
+#  earlier version of TLS.
+#
+TLS13_L_BIT_WRONG = awk '/Phase 2 (EAP )?Request: type=13/ { inner = 1; next } /^SSL: Received packet\(len=[0-9]*\) - Flags 0x/ { if (inner) { inner = 0; next } if (/Flags 0x[89a-f]/ && !/Flags 0x[4-7c-f]/ && !more) bad = 1; if (/len=([7-9]|[1-9][0-9]+)\) - Flags 0x0/) good = 1; more = /Flags 0x[4-7c-f]/ } END { exit !(bad || !good) }'
+
+#
+#  The size of the largest EAP packet the server must send, if it's checked.
+#
+#  fragment_size (100) is smaller than the NAS's Framed-MTU (105), so it
+#  is the limit: EAP packets of fragment_size less 4.
+$(BUILD_PATH)/tests/eap/eap-pwd-small-mtu.ok: EAP_LEN = 96
+EAP_LARGEST_REQUEST = sed -n 's/^decapsulated EAP packet (code=1 id=[0-9]* len=\([0-9]*\)).*/\1/p'
+$(BUILD_PATH)/tests/eap/eap-tls-13-resume.ok: RESUMES = 3
 
 $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(BUILD_PATH)/tests/eap radiusd.pid radiusd.kill
 	${Q}printf 'EAPOL_TEST %s ' $(notdir $(patsubst %.conf,%,$<))
@@ -306,10 +387,60 @@ $(BUILD_PATH)/tests/eap/%.ok: $(top_builddir)/src/tests/%.conf | radiusd.kill $(
 		$(MAKE) radiusd.kill; \
 		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
 		exit 1; \
+	elif [ -n "$(TLS_METHOD)" ] && ! { $(call FRAGMENT_SIZE_OK,$(LOG)); }; then \
+		echo " - " FAILED - EAP packets do not use fragment_size; \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ -n "$(FRAMED_MTU)" ] && ! { $(call FRAMED_MTU_OK,$(LOG),$(FRAMED_MTU)); }; then \
+		echo " - " FAILED - EAP packets do not fit Framed-MTU $(FRAMED_MTU); \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ "`$(call ACCEPT_FRAMED_MTU_SEEN,$(LOG))`" != "$(ACCEPT_FRAMED_MTU)" ]; then \
+		echo " - " FAILED - Access-Accept missing, or with the wrong Framed-MTU; \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ -n "$(EAP_LEN)" ] && [ "`$(EAP_LARGEST_REQUEST) $(LOG) | sort -n | tail -1`" != "$(EAP_LEN)" ]; then \
+		echo " - " FAILED - the largest EAP packet was not $(EAP_LEN) octets; \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
+	elif [ -n "$(RESUMES)" ] && ! awk '/Handshake finished - resumed=1/ { r++ } r && /Handshake finished - resumed=0/ { bad = 1 } END { exit (bad || !r) }' $(LOG); then \
+		echo " - " FAILED - a session after the first resumption was not resumed; \
+		echo ">>> cmd -" $(CMD); \
+		echo ">>> log -" $(LOG); \
+		$(MAKE) radiusd.kill; \
+		$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),FAIL,$(LOG)); \
+		exit 1; \
 	fi
 	@echo
 	${Q}$(call test_record,eap,$(notdir $(patsubst %.conf,%,$<)),PASS,$(LOG))
 	${Q}touch $@
+
+#
+#  A client certificate with an extension of 20000 octets, signed by the
+#  test CA.
+#
+$(BUILD_PATH)/tests/eap/client-large.crt: $(RADDB_PATH)certs/client.key $(RADDB_PATH)certs/ca.pem | $(BUILD_PATH)/tests/eap
+	${Q}printf '[ext]\nbasicConstraints = CA:FALSE\nextendedKeyUsage = clientAuth\n1.3.6.1.4.1.11344.1 = ASN1:UTF8String:%s\n' \
+		`head -c 20000 /dev/zero | tr '\\0' x` > $@.ext
+	${Q}openssl req -new -key $(RADDB_PATH)certs/client.key -passin pass:whatever \
+		-subj /CN=user@example.org | \
+	openssl x509 -req -CA $(RADDB_PATH)certs/ca.pem -CAkey $(RADDB_PATH)certs/ca.key \
+		-passin pass:whatever -set_serial 1000 -days 2 \
+		-extfile $@.ext -extensions ext -out $@ 2>/dev/null
+
+$(BUILD_PATH)/tests/eap/eap-tls-large-cert.ok: $(BUILD_PATH)/tests/eap/client-large.crt
 
 #
 #  Don't run the full TLS version tests for CI post-install.
@@ -354,6 +485,27 @@ $(BUILD_PATH)/tests/eap/${1}-${2}.ok: $(BUILD_PATH)/tests/eap/${1}-${2}.conf
 		$(MAKE) radiusd.kill; \
 		$$(call test_record,eap,$$(notdir $$(patsubst %.ok,%,$$@)),FAIL,$$(LOG)); \
 		exit 1; \
+	elif ! { $$(call FRAGMENT_SIZE_OK,$$(LOG)); }; then \
+		echo " - " FAILED - EAP packets do not use fragment_size; \
+		echo ">>> cmd -" $$(CMD) -r 1; \
+		echo ">>> log -" $$(LOG); \
+		$(MAKE) radiusd.kill; \
+		$$(call test_record,eap,$$(notdir $$(patsubst %.ok,%,$$@)),FAIL,$$(LOG)); \
+		exit 1; \
+	elif [ "`$$(call ACCEPT_FRAMED_MTU_SEEN,$$(LOG))`" != "$$(ACCEPT_FRAMED_MTU)" ]; then \
+		echo " - " FAILED - Access-Accept missing, or with the wrong Framed-MTU; \
+		echo ">>> cmd -" $$(CMD) -r 1; \
+		echo ">>> log -" $$(LOG); \
+		$(MAKE) radiusd.kill; \
+		$$(call test_record,eap,$$(notdir $$(patsubst %.ok,%,$$@)),FAIL,$$(LOG)); \
+		exit 1; \
+	elif [ "${2}" = "1.3" ] && $$(TLS13_L_BIT_WRONG) $$(LOG); then \
+		echo " - " FAILED - L bit set in an unfragmented message, or none sent without it; \
+		echo ">>> cmd -" $$(CMD) -r 1; \
+		echo ">>> log -" $$(LOG); \
+		$(MAKE) radiusd.kill; \
+		$$(call test_record,eap,$$(notdir $$(patsubst %.ok,%,$$@)),FAIL,$$(LOG)); \
+		exit 1; \
 	fi
 	@echo
 	${Q}$$(call test_record,eap,$$(notdir $$(patsubst %.ok,%,$$@)),PASS,$$(LOG))
@@ -368,7 +520,7 @@ endef
 $(foreach FILE,$(patsubst %.conf,%,$(EAP_TLS_FILES)),$(foreach TLS,$(EAP_TLS_VERSIONS),$(eval $(call EAP_TLS_CONFIG,${FILE},${TLS}))))
 endif # there's no "prefix", so we don't run the full EAP tests
 
-EAPOL_OK_FILES := $(sort $(addprefix $(BUILD_PATH)/tests/eap/,$(patsubst %.conf,%.ok, $(notdir $(EAP_TLS_FILES) $(EAP_FILES)))) $(EAP_TLS_VERSION_FILES))
+EAPOL_OK_FILES := $(sort $(addprefix $(BUILD_PATH)/tests/eap/,$(patsubst %.conf,%.ok, $(notdir $(EAP_TLS_FILES) $(EAP_FRAMED_MTU_FILES) $(EAP_SESSION_STATE_FILES) $(EAP_FILES)))) $(EAP_TLS_VERSION_FILES))
 
 tests.eap: $(EAPOL_OK_FILES) | radiusd.kill radiusd.pid
 else

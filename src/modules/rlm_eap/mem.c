@@ -524,10 +524,11 @@ eap_handler_t *eaplist_find(rlm_eap_t *inst, REQUEST *request,
 		return NULL;
 	}
 
-	if (handler->trips >= 50) {
-		RERROR("Aborting! More than 50 roundtrips "
+	if ((uint32_t) handler->trips >= inst->max_rounds) {
+		RERROR("Aborting! More than %u roundtrips "
 		       "made in session with state "
-		       "0x%02x%02x%02x%02x%02x%02x%02x%02x",
+		       "0x%02x%02x%02x%02x%02x%02x%02x%02x.  Increase \"max_rounds\" to allow more",
+		       inst->max_rounds,
 		       state->vp_octets[0], state->vp_octets[1],
 		       state->vp_octets[2], state->vp_octets[3],
 		       state->vp_octets[4], state->vp_octets[5],

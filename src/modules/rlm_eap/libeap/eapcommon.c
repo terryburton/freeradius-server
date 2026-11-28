@@ -457,15 +457,17 @@ eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 			}
 
 			/*
-			 *	This is arguably wrong... a single TLS
-			 *	record is max 16K in length.  But a
-			 *	TLS message may span multiple TLS
-			 *	records.
+			 *	A TLS message may span multiple TLS
+			 *	records, so it can be larger than one
+			 *	record (16K).  eaptls_verify() uses only
+			 *	the low 16 bits of the length.  The data
+			 *	itself is limited by the size of the
+			 *	session's buffers, not by this length.
 			 */
 			memcpy(&tls_len, eap_packet->data + 2, 4);
 			tls_len = ntohl(tls_len);
-			if (tls_len > 16384) {
-				fr_strerror_printf("Malformed EAP packet - TLS reassembled data length %u (%08x) (will be greater than the TLS maximum record size of 16384 bytes", tls_len, tls_len);
+			if (tls_len > 65535) {
+				fr_strerror_printf("Malformed EAP packet - TLS reassembled data length %u (%08x) is greater than 65535 bytes", tls_len, tls_len);
 				talloc_free(eap_packet);
 				return NULL;
 			}

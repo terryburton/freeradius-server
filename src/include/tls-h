@@ -169,6 +169,8 @@ typedef struct _tls_session_t {
 	char const	*label;
 	bool		allow_session_resumption;	//!< Whether session resumption is allowed.
 	bool		session_not_resumed;		//!< Whether our session was not resumed.
+	char		*resumed_session_id;		//!< ID of the cached session the peer asked for.
+	VALUE_PAIR	*resumed_vps;			//!< Its attributes, from the "virtual_server" cache.
 
 	fr_tls_server_conf_t const *conf;		//! for better complaints
 } tls_session_t;
@@ -333,6 +335,8 @@ fr_tls_server_conf_t *tls_server_conf_alloc(TALLOC_CTX *ctx);
 SSL_CTX		*tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_file, char const *private_key_file);
 int 		tls_handshake_recv(REQUEST *, tls_session_t *ssn);
 int 		tls_handshake_send(REQUEST *, tls_session_t *ssn);
+void		tls_session_hold_tickets(tls_session_t *ssn);
+void		tls_session_issue_ticket(REQUEST *request, tls_session_t *ssn);
 void 		tls_session_information(tls_session_t *ssn);
 void		tls_session_id(SSL_SESSION *ssn, char *buffer, size_t bufsize);
 X509_STORE	*fr_init_x509_store(fr_tls_server_conf_t *conf);

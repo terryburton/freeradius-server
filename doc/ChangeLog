@@ -15,6 +15,48 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	  helps with firewalls and NAT which silently discard the state of
 	  idle connections, where the next query on a re-used connection
 	  hangs or fails.  See the "pool" section of mods-available/sql.
+	* Fix the EAP-TLS fragment_size being reduced once for each EAP
+	  method which uses the same tls-config section.
+	* Fix EAP-TLS packets being larger than the Framed-MTU allows.
+	* Don't send the EAP-TLS fragment size as Framed-MTU in the
+	  Access-Accept.
+	* Fix EAP-TLS rejecting messages from the peer which are longer
+	  than one TLS record, such as a large client certificate chain.
+	* Fix EAP-pwd ignoring a Framed-MTU just above its fragment_size.
+	* Log a warning when a reply or proxied packet is too large for
+	  all of its attributes, naming the first one which was not sent.
+	* Fix PEAP with an inner EAP method failing when an inner packet
+	  takes more than one round, e.g. EAP-TLS with a CBC cipher.
+	* Fix a memory leak with OpenSSL 3 in EAP-pwd, and anywhere else
+	  which re-uses an HMAC context (MPPE keys, rlm_wimax).
+	* Fix every other TLS 1.3 session not being resumed with the disk
+	  session cache ("persist_dir").
+	* Fix rlm_cache returning cached session-state attributes only once
+	  with the rbtree driver.  This broke TLS session resumption through
+	  a "tls-cache" virtual server.
+	* Add "max_rounds" to the EAP module, for sessions which need more
+	  than 50 round trips, e.g. with large certificate chains.
+	* Fix EAP-TLS inside PEAP or TTLS taking two rounds for each inner
+	  packet with CBC ciphers, as the inner packets were too large for
+	  one outer fragment.
+	* Don't let a peer run TTLS, PEAP, FAST or TEAP inside another
+	  EAP tunnel.
+	* Fix EAP-pwd packets being 9 octets larger than "fragment_size"
+	  allows.  It now has the same meaning as for TLS.
+	* Reject a peer which sends an EAP-TLS, PEAP, TTLS, FAST or TEAP
+	  ACK when there is nothing to acknowledge, instead of answering
+	  with empty Requests until the round limit.
+	* Reject a peer which sends EAP-TLS data instead of acknowledging
+	  a fragment of the server's message.
+	* Fix EAP-TLS taking a later fragment from the peer for its first,
+	  when every fragment carries the TLS Message Length.
+	* Say which setting to raise when the peer's EAP-TLS message is
+	  larger than the TLS buffer.
+	* Fix TTLS with TLS 1.3 never sending a session ticket when the
+	  peer sends its first attributes with its Finished, so that the
+	  session could not be resumed.
+	* PEAP with TLS 1.3 now sends the session ticket only once the
+	  inner authentication has succeeded, with the Result TLV.
 
 	Bug fixes
 
