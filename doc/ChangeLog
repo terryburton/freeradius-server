@@ -55,6 +55,8 @@ FreeRADIUS 3.2.12 Thu 26 Nov 2026 12:00:00 UTC urgency=low
 	* Fix TTLS with TLS 1.3 never sending a session ticket when the
 	  peer sends its first attributes with its Finished, so that the
 	  session could not be resumed.
+	* PEAP with TLS 1.3 now sends the session ticket only once the
+	  inner authentication has succeeded, with the Result TLV.
 
 	Bug fixes
 
