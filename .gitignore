@@ -3,3 +3,4 @@ certs/
 */eapol_test.log
 */.*
 */eapol_test.*-*.conf
+*/eapol_test.fs*.conf

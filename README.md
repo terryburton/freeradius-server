@@ -49,6 +49,7 @@ blocks, with `@NAME@` placeholders for the settings above.
 | 09 | One Response carries the previous Request's Identifier: not acted on | RFC 3748 4.1 | master #42 (v3.2.x already rejects) |
 | 10 | TTLS-EAP-TLS with an AES-CBC-SHA384 outer session takes no more rounds than with AES-GCM | the server's own nesting allowance (inner fragments must fit one outer fragment) | v3.2.x #39, master #41 |
 | 11 | TEAP: the peer ACKs instead of sending its Crypto-Binding: never accepted | RFC 7170 | (none needed: a regression check) |
+| 12 | EAP-pwd: the peer fragments its own messages (60, 40, 20 octets): authenticates | RFC 5931 fragmentation (the server's ACK has no L or M) | master #54 (v3.2.x already fixed) |
 
 The `#` numbers are draft pull requests on
 [terryburton/freeradius-server](https://github.com/terryburton/freeradius-server/pulls),
@@ -73,6 +74,7 @@ identities, from the environment).
 | 09 | PASS | PASS | FAIL: acted on, and accepted | PASS |
 | 10 | FAIL: 18 rounds against 15 | PASS | FAIL: 16 against 14 | PASS |
 | 11 | PASS | PASS | (no TEAP) | (no TEAP) |
+| 12 | PASS | PASS | FAIL: stalls or rejected (L and M bits from uninitialised memory) | PASS (with #54) |
 
 \* v3.2.x's `src/tests` server has no `Post-Auth-Type REJECT { eap }`,
 which the stock raddb has, and that is what adds the EAP-Failure.

@@ -1,0 +1,26 @@
+#!/bin/bash
+#
+#  EAP-pwd: the peer fragments its own messages (eapol_test's
+#  fragment_size, here 60, 40 and 20 octets).
+#
+#  RFC 5931 (its fragmentation section; the section number is not
+#  checked here): a fragmented message has L (and the Total-Length) only
+#  in its first fragment, and M in all but the last, and each fragment is
+#  ACKed with an EAP-pwd Request of no data.  The server's ACK must carry
+#  neither L nor M.  So the server reassembles and authenticates.
+#
+#  At 10 octets, eapol_test itself fails (it declares success before its
+#  last Confirm fragment is sent), against any server, so this stops at 20.
+#
+. "$(dirname "$0")/../common.sh"
+build_eapol_test
+for fs in 60 40 20; do
+	sed "s/@PEER_FRAGMENT_SIZE@/$fs/" "$HERE/eapol_test.conf" > "$HERE/eapol_test.fs$fs.conf"
+	run_eapol_test "eapol_test.fs$fs.conf" || true
+	if ! got_access_accept; then
+		grep -q 'Frame too short to contain Total-Length field' "$LOG" &&
+			fail "peer fragments of $fs octets: the server's ACK has the L bit, and no Total-Length"
+		fail "peer fragments of $fs octets: not authenticated ($(got_access_reject && echo Access-Reject || echo no result))"
+	fi
+done
+pass "authenticated with the peer's EAP-pwd messages in fragments of 60, 40 and 20 octets"
