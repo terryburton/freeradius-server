@@ -122,7 +122,7 @@ server default {
 				#  max_rounds:: The maximum number of message exchanges before the server
 				#  gives up
 				#
-#				max_rounds = 40
+#				max_rounds = 50
 
 				#
 				#  timeout:: How long to wait before expiring a session.
