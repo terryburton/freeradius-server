@@ -256,7 +256,7 @@ static unlang_action_t mod_process(unlang_result_t *p_result, module_ctx_t const
 		eap_round->request->type.num = FR_EAP_METHOD_PWD;
 		eap_round->request->type.length = sizeof(pwd_hdr);
 
-		MEM(eap_round->request->type.data = talloc_array(eap_round->request, uint8_t, sizeof(pwd_hdr)));
+		MEM(eap_round->request->type.data = talloc_zero_array(eap_round->request, uint8_t, sizeof(pwd_hdr)));
 
 		hdr = (pwd_hdr *)eap_round->request->type.data;
 		EAP_PWD_SET_EXCHANGE(hdr, exch);
